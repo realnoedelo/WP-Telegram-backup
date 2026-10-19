@@ -1,0 +1,19 @@
+# Security
+
+The administrative REST API requires both `manage_options` and a valid WordPress REST nonce. There are no anonymous backup, download, bot-command or remote-restore endpoints.
+
+Archive payloads are compressed in bounded records and encrypted with AES-256-GCM before writing to disk. A fresh 256-bit salt and PBKDF2-HMAC-SHA256 (210,000 iterations) derive the key for each backup. Use a randomly generated, unique long password. The encrypted record sequence, part headers, preceding-part SHA-256 and authenticated final record protect against alteration, reorder and truncation. See docs/FORMAT.md. This is an open, versioned format; it has not undergone an independent cryptographic audit.
+
+Bot and proxy credentials and the archive password are stored encrypted with a key derived from WordPress salts. This reduces accidental plaintext exposure in the options table; it cannot protect against an attacker who controls the same WordPress/PHP process or possesses the database and wp-config.php. Changing WordPress salts requires re-entering saved secrets. Archive passwords are not sent in Telegram messages. Never put a password into a caption or the same chat as the backup.
+
+Backup directories are mode0700 and files mode0600, outside the known public WordPress/document root. An administrator must still choose a private path that no additional web-server alias exposes. The default temporary directory is not a durable long-term storage service. The plugin never follows source symlinks; unreadable files are an explicit failure.
+
+All Bot API calls share a cURL transport with TLS verification, fixed allowed methods and no redirects. Public remote API endpoints require HTTPS; explicit loopback/private IP local API deployments may use HTTP. Proxies and DNS endpoints are administrator-selected. No credentials are included in the diagnostics response or ordinary logs. The Telegram token is necessarily part of the Bot API request URL; protect reverse-proxy/access logs on a self-hosted Bot API server.
+
+Delivery may duplicate a part if Telegram accepted it but its response was lost. Telegram does not expose an idempotency key for sendDocument. Local retention deletes only completed backups, never pending or failed artifacts. Remote messages are never automatically deleted.
+
+The standalone recovery tool refuses nonempty destinations and unsafe paths. It never imports SQL or rewrites a running site. Treat restored PHP as executable code from the backed-up website: recover to an isolated private location before testing it.
+
+System cron setup changes only the plugin's marked block in the current non-root PHP user's crontab. It preserves unrelated tasks, verifies the CLI bootstrap and storage, and uses bounded subprocess calls without shell interpolation. Hosting policies may disable this feature. The scheduled runner loads the intended active plugin and handles only its two due events; it never creates a public worker endpoint. Deactivation attempts to remove the owned block. Run CLI lifecycle commands as the same OS user as web PHP.
+
+Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/realnoedelo/WP-Telegram-backup/security/advisories/new). Do not put credentials, personal backup data or exploit details in a public issue. Please include the affected version, reproduction steps and expected impact, using synthetic data.

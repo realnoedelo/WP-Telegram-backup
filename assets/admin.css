@@ -1,0 +1,76 @@
+/* Only layout additions to native WordPress admin components. */
+.parcel-app { color:#1d2327; font-size:13px; }
+.parcel-app .p-content { padding-top:12px; }
+.parcel-app .p-nav { margin-bottom:8px; }
+.parcel-app .p-nav::after { content:""; display:table; clear:both; }
+.parcel-app .p-overview-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; margin-top:20px; }
+.parcel-app .postbox { margin-bottom:0; }
+.parcel-app .postbox > h2 { border-bottom:1px solid #c3c4c7; padding:12px; margin:0; font-size:14px; font-weight:600; }
+.parcel-app .postbox .inside { margin:10px 12px 12px; }
+.parcel-app .p-status-table { width:100%; border-collapse:collapse; }
+.parcel-app .p-status-table th,.parcel-app .p-status-table td { text-align:left; vertical-align:top; padding:7px 5px; font-size:13px; line-height:1.5; }
+.parcel-app .p-status-table th { font-weight:600; width:47%; }
+.parcel-app .p-run-controls,.parcel-app .p-action-row,.parcel-app .p-job-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.parcel-app .p-run-controls label { margin-right:2px; }
+.parcel-app .p-section-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:8px; }
+.parcel-app .p-section-bar h2 { margin:14px 0; }
+.parcel-app .p-section-details { margin:16px 0; }
+.parcel-app details summary { cursor:pointer; font-weight:600; }
+.parcel-app details[open] > summary { margin-bottom:12px; }
+.parcel-app details p,.parcel-app details li { max-width:900px; }
+.parcel-app pre { overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f6f7f7; border:1px solid #c3c4c7; padding:10px; font-size:12px; }
+.parcel-app pre code { background:none; padding:0; }
+.parcel-app .p-state { font-weight:600; }
+.parcel-app .p-state--green { color:#008a20; }
+.parcel-app .p-state--amber { color:#996800; }
+.parcel-app .p-state--red,.parcel-app .p-error { color:#d63638; }
+.parcel-app .p-state--neutral { color:#50575e; }
+.parcel-app .p-notice { position:relative; padding-right:38px; }
+.parcel-app .p-notice .notice-dismiss { top:2px; }
+.parcel-app .p-savebar { display:flex; gap:12px; align-items:center; }
+.parcel-app .p-savebar .description { font-size:13px; }
+.parcel-app .form-table { max-width:1050px; }
+.parcel-app .form-table th { width:225px; padding:15px 10px 15px 0; }
+.parcel-app .form-table td { padding:12px 10px; }
+.parcel-app .form-table .description { margin-top:5px; }
+.parcel-app .form-table input.small-text { width:110px; }
+.parcel-app .form-table .large-text { max-width:600px; }
+.parcel-app .p-chat-results { margin-top:8px; }
+.parcel-app .p-chat-results p { margin:7px 0; }
+.parcel-app .p-check-table td:first-child { width:24%; }
+.parcel-app .p-check-table td:nth-child(2) { width:15%; }
+.parcel-app .p-check-table td { vertical-align:top; }
+.parcel-app .p-table-scroll { overflow-x:auto; }
+.parcel-app .p-jobs-table { min-width:650px; }
+.parcel-app .p-jobs-table th { font-weight:600; }
+.parcel-app .p-jobs-table td { vertical-align:top; padding:10px; }
+.parcel-app .p-jobs-table td:first-child { min-width:170px; }
+.parcel-app .p-jobs-table td:nth-child(2) { min-width:180px; }
+.parcel-app .p-jobs-table td:nth-child(3),.parcel-app .p-jobs-table td:nth-child(4) { white-space:nowrap; }
+.parcel-app .p-jobs-table .description { margin:5px 0 0; font-size:12px; }
+.parcel-app .p-jobs-table code { font-size:11px; padding:1px 3px; }
+.parcel-app .p-job-actions { gap:8px 10px; }
+.parcel-app .p-job-actions .button-link-delete { text-align:left; font-size:12px; }
+.parcel-app .p-progress { margin-top:5px; font-size:12px; }
+.parcel-app .p-progress span { display:block; }
+.parcel-app progress { display:block; width:100%; height:10px; margin:6px 0; accent-color:#2271b1; }
+.parcel-app .p-log-panel pre { max-height:300px; overflow:auto; font-size:11px; }
+.parcel-app .p-part-list { margin:10px 0; }
+.parcel-app .p-part-list li { margin:5px 0; overflow-wrap:anywhere; }
+.parcel-app .button:disabled { cursor:wait; }
+.parcel-app .button[disabled]:not([aria-busy]) { cursor:not-allowed; }
+.parcel-app h1:focus { outline:none; }
+@media (max-width:1050px) { .parcel-app .p-overview-grid { grid-template-columns:1fr; } }
+@media (max-width:782px) {
+ .parcel-app .p-nav .nav-tab { margin:5px 4px 0 0; padding:6px 9px; font-size:13px; }
+ .parcel-app .form-table th { width:auto; padding:12px 0 5px; }
+ .parcel-app .form-table td { padding:5px 0 10px; }
+ .parcel-app .form-table .regular-text,.parcel-app .form-table select,.parcel-app .form-table .large-text { max-width:100%; }
+ .parcel-app .p-status-table th { width:45%; }
+ .parcel-app .p-check-table { display:block; overflow-x:auto; }
+ .parcel-app .p-check-table th,.parcel-app .p-check-table td { min-width:100px; }
+ .parcel-app .p-savebar { flex-wrap:wrap; }
+ .parcel-app .p-run-controls label { width:100%; }
+ .parcel-app .p-run-controls { align-items:flex-start; }
+ .parcel-app .p-overview-grid { gap:16px; }
+}

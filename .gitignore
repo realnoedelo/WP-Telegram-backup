@@ -1,0 +1,13 @@
+/dist/
+/node_modules/
+/vendor/
+__pycache__/
+*.pyc
+.DS_Store
+*.zip
+*.pvlt
+*.sql
+*.sql.gz
+.env
+.env.*
+wp-config.php

@@ -1,0 +1,26 @@
+name: Plugin checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  php:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: openssl, curl, zlib
+          coverage: none
+      - run: find . -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: php tests/archive.php
+      - run: php tests/telegram-test.php --http
+      - run: php tests/system-cron.php
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check assets/admin.js
+      - run: python3 scripts/build-release.py
