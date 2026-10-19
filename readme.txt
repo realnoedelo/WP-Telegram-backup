@@ -3,7 +3,7 @@ Tags: backup, telegram, encrypted backup, restore, schedule
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.1
+Stable tag: 1.0.2
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
@@ -48,7 +48,7 @@ Telegram Bot API documentation: https://core.telegram.org/bots/api
 The host needs PHP 8.1+ (64-bit), OpenSSL, zlib, cURL, writable private storage and enough free disk space. Set TELEGRAM_BACKUP_STORAGE_DIR in wp-config.php to a durable private directory outside the public web root. Without it, TG Backup uses a private system temporary directory, which the host may clean.
 
 = Updating from 1.0.0 =
-Wait for active jobs to finish and keep the archive password and private backup directory. Leave TELEGRAM_BACKUP_STORAGE_DIR unchanged. Deactivate the old plugin in the telegram-backup folder; do not use WordPress Delete, since its uninstall handler can remove shared settings. Upload tg-backup-1.0.1.zip and activate TG Backup. Do not activate both versions together. Check the retained connection settings, history, storage and cron heartbeat. Update a stale system cron entry through Overview > Cron setup. After verification, remove only the inactive old plugin source folder using your file manager; keep private storage.
+Wait for active jobs to finish and keep the archive password and private backup directory. Leave TELEGRAM_BACKUP_STORAGE_DIR unchanged. Deactivate the old plugin in the telegram-backup folder; do not use WordPress Delete, since its uninstall handler can remove shared settings. Upload tg-backup-1.0.2.zip and activate TG Backup. Do not activate both versions together. Check the retained connection settings, history, storage and cron heartbeat. Update a stale system cron entry through Overview > Cron setup. After verification, remove only the inactive old plugin source folder using your file manager; keep private storage.
 
 == Frequently Asked Questions ==
 
@@ -74,6 +74,9 @@ DNS server selection depends on the libcurl build. Unsupported options fail with
 This archive is an independently installable source release. A directory listing and its contributor account must be registered and reviewed separately.
 
 == Changelog ==
+= 1.0.2 =
+* Added optional BTC and USDT (TRON / TRC20) donation addresses to the settings footer and README.
+
 = 1.0.1 =
 * Renamed the plugin and folder to TG Backup / tg-backup while preserving settings, storage and archive compatibility.
 * Integrated Bot API requests with the WordPress HTTP API, retaining streaming uploads and proxy/DNS controls.
@@ -84,5 +87,8 @@ This archive is an independently installable source release. A directory listing
 Initial free source release: encrypted backup engine, Telegram transport, scheduling, quotas, network diagnostics and standalone recovery.
 
 == Upgrade Notice ==
+= 1.0.2 =
+Adds an unobtrusive donation footer. Backup settings and behavior are unchanged.
+
 = 1.0.1 =
 The plugin folder is now tg-backup. Deactivate the old version without using WordPress Delete, install the new ZIP, and verify settings, history and cron. Keep TELEGRAM_BACKUP_STORAGE_DIR unchanged.

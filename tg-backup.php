@@ -3,7 +3,7 @@
  * Plugin Name: TG Backup
  * Plugin URI: https://github.com/realnoedelo/WP-Telegram-backup
  * Description: Encrypted, resumable WordPress backups to your own Telegram bot. Schedules, storage quotas, proxy and DNS diagnostics included.
- * Version: 1.0.1
+ * Version: 1.0.2
  * Requires at least: 6.5
  * Requires PHP: 8.1
  * Author: realnoedelo and contributors
@@ -13,7 +13,7 @@
  * Text Domain: tg-backup
  */
 if (!defined('ABSPATH')) { exit; }
-define('PARCEL_VERSION', '1.0.1');
+define('PARCEL_VERSION', '1.0.2');
 define('PARCEL_FILE', __FILE__);
 define('PARCEL_DIR', plugin_dir_path(__FILE__));
 define('PARCEL_URL', plugin_dir_url(__FILE__));

@@ -48,6 +48,7 @@ final class Admin
         if (!current_user_can('manage_options')) {
             wp_die(esc_html__('You do not have permission to manage backups.', 'tg-backup'));
         }
-        echo '<div class="wrap parcel-wrap"><div id="parcel-app" class="parcel-app" aria-busy="true"><div class="parcel-loading" role="status">' . esc_html__('Loading TG Backup…', 'tg-backup') . '</div></div><noscript><p>' . esc_html__('Enable JavaScript in your browser to manage this plugin.', 'tg-backup') . '</p></noscript></div>';
+        echo '<div class="wrap parcel-wrap"><div id="parcel-app" class="parcel-app" aria-busy="true"><div class="parcel-loading" role="status">' . esc_html__('Loading TG Backup…', 'tg-backup') . '</div></div><noscript><p>' . esc_html__('Enable JavaScript in your browser to manage this plugin.', 'tg-backup') . '</p></noscript>';
+        echo '<p class="description">' . esc_html__('Support TG Backup by realnoedelo', 'tg-backup') . '<br>BTC (Bitcoin): <code>14hr2hSujN6R6rqpEMdazBYQdfTSjV3dwo</code> · USDT (TRON / TRC20): <code>TQNshBHK89R3qccPG6EmjitzoDkuuLSB32</code></p></div>';
     }
 }
