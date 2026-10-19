@@ -17,8 +17,14 @@ jobs:
           coverage: none
       - run: find . -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: php tests/archive.php
-      - run: php tests/telegram-test.php --http
+      - name: Download WordPress HTTP API for transport integration tests
+        run: |
+          mkdir -p /tmp/tg-backup-wordpress
+          curl --fail --silent --show-error --location --retry 3 https://wordpress.org/wordpress-6.5.tar.gz --output /tmp/tg-backup-wordpress.tar.gz
+          tar -xzf /tmp/tg-backup-wordpress.tar.gz -C /tmp/tg-backup-wordpress
+      - run: php tests/telegram-test.php --http --wp=/tmp/tg-backup-wordpress/wordpress
       - run: php tests/system-cron.php
+      - run: php tests/engine-status.php
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

@@ -58,7 +58,7 @@ final class Api {
             return self::download(Storage::job_dir($id).'/'.$name,$name);
             } finally { Storage::unlock($lock); }
         });
-        self::route('/recovery','GET',static fn()=>self::download(PARCEL_DIR.'tools/restore.php','telegram-backup-restore.php'));
+        self::route('/recovery','GET',static fn()=>self::download(PARCEL_DIR.'tools/restore.php','tg-backup-restore.php'));
     }
     private static function consent(): void { if (!Settings::get()['consent']) { throw new \RuntimeException('First allow uploads to your Telegram account in the connection settings.'); } }
     private static function type($r): string {
@@ -85,7 +85,7 @@ final class Api {
         while (ob_get_level()) { ob_end_clean(); }
         nocache_headers(); header('Content-Type: application/octet-stream'); header('X-Content-Type-Options: nosniff');
         header('Content-Disposition: attachment; filename="'.sanitize_file_name($name).'"'); header('Content-Length: '.filesize($path));
-        $fp=fopen($path,'rb'); if (!$fp) { throw new \RuntimeException('Could not open the file.'); }
-        fpassthru($fp); fclose($fp); exit;
+        $fp=fopen($path,'rb'); if (!$fp) { throw new \RuntimeException('Could not open the file.'); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream the authorized binary attachment without buffering the whole backup.
+        fpassthru($fp); fclose($fp); exit; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream the authorized binary attachment without buffering the whole backup.
     }
 }

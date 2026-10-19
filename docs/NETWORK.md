@@ -1,6 +1,8 @@
 # Networking, proxies, and DNS
 
-The connection settings apply to every outgoing request made by the plugin: bot authentication, chat and webhook checks, chat discovery, messages, and backup part uploads. All use the same PHP cURL transport. WordPress network settings, the administrator's browser settings, and process environment variables do not override the configuration selected in the plugin.
+The connection settings apply to bot authentication, chat and webhook checks, chat discovery, messages, and backup uploads. Requests enter WordPress through `wp_remote_post()` and use its bundled cURL transport. Scoped hooks apply the plugin proxy, DNS and TLS settings only to the matching request; file uploads stream from disk through `CURLFile` rather than loading the archive into memory. PHP cURL remains required. There is no fallback to an unconfigured transport or a full in-memory upload.
+
+WordPress HTTP hooks and host policies can still affect or reject requests. The administrator's browser network settings do not configure the WordPress server. The plugin removes its temporary request hooks after completion or failure.
 
 ## Direct connection
 
@@ -15,7 +17,7 @@ Leave the proxy, DNS, and DoH fields empty. The WordPress server connects to the
 | SOCKS5 | `socks5://192.0.2.10:1080` | On the WordPress server |
 | SOCKS5H | `socks5h://proxy.example.org:1080` | On the proxy |
 
-These are example addresses, not working free services. Enter the username and password in their separate fields. URLs such as `http://user:password@host:port` are rejected. The proxy password and bot token are stored encrypted using WordPress keys. Their values are not returned to the interface, logs, or diagnostic errors.
+These are example addresses, not working free services. Enter the username and password in their separate fields. URLs such as `http://user:password@host:port` are rejected. The proxy password and bot token are stored encrypted using WordPress keys. The plugin does not return saved secret values to the interface and redacts them from its diagnostics and ordinary logs. WordPress HTTP hooks can inspect outgoing requests; third-party logging plugins and reverse proxies must also protect the token in request paths.
 
 An HTTP proxy connects to an HTTPS Bot API through cURL's normal tunnel, with the Bot API certificate verified. SOCKS5 does not encrypt its own connection to the proxy. The HTTPS request still uses TLS, but SOCKS5 credentials may be visible on an untrusted network between WordPress and the proxy. Use a trusted route.
 

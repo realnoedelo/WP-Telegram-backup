@@ -4,7 +4,7 @@ namespace ParcelBackups;
 
 final class Telegram
 {
-    private const METHODS = ['getMe', 'getChat', 'getWebhookInfo', 'getUpdates', 'sendMessage', 'sendDocument'];
+    private const METHODS = ['getMe', 'getChat', 'getWebhookInfo', 'getUpdates', 'sendMessage', 'editMessageText', 'sendDocument'];
     private const MAX_RESPONSE_BYTES = 2097152;
     private array $settings;
     private string $token;
@@ -45,6 +45,7 @@ final class Telegram
         $params = $this->recipient();
         $params['caption'] = self::clip($caption, 900);
         $params['disable_content_type_detection'] = 'true';
+        $params['disable_notification'] = 'true';
         $result = $this->transport('sendDocument', $params, $path);
         if (empty($result['message_id'])) {
             throw new TelegramException('The Bot API did not confirm a message ID for the uploaded document. Check the chat before retrying: a duplicate is possible.', true, 60);
@@ -58,6 +59,23 @@ final class Telegram
             throw new TelegramException('The message text is empty.');
         }
         return $this->transport('sendMessage', $this->recipient() + ['text' => self::clip($text, 4000)]);
+    }
+
+    public function edit_message(int $messageId, string $text): array
+    {
+        if ($messageId < 1 || trim($text) === '') { throw new TelegramException('A valid message ID and nonempty text are required.'); }
+        $recipient = $this->recipient();
+        try {
+            return $this->transport('editMessageText', [
+                'chat_id' => $recipient['chat_id'], 'message_id' => $messageId,
+                'text' => self::clip($text, 4000), 'disable_web_page_preview' => 'true',
+            ]);
+        } catch (TelegramException $error) {
+            if ($error->getCode() === 400 && stripos($error->getMessage(), 'message is not modified') !== false) {
+                return ['message_id' => $messageId, 'unchanged' => true];
+            }
+            throw $error;
+        }
     }
 
     public function diagnostics(bool $sendTest = false): array
@@ -75,8 +93,7 @@ final class Telegram
         };
         try {
             $this->validate();
-            $handle = $this->make_handle(false);
-            unset($handle);
+            $this->curl_options(false);
             $add('network', 'Network settings', true, $this->network_description());
         } catch (\Throwable $error) {
             $add('network', 'Network settings', false, $this->redact($error->getMessage()));
@@ -117,18 +134,18 @@ final class Telegram
             try {
                 Storage::ensure_space(4096);
                 $path = Storage::root() . '/connection-test-' . bin2hex(random_bytes(8)) . '.txt';
-                $body = "Telegram Backup: connection test.\nNo site data is included.\nUTC: " . gmdate('c') . "\n";
+                $body = "TG Backup: connection test.\nNo site data is included.\nUTC: " . gmdate('c') . "\n";
                 if (file_put_contents($path, $body, LOCK_EX) !== strlen($body)) {
                     throw new TelegramException('Could not create a test file in protected storage.');
                 }
-                chmod($path, 0600);
-                $message = $this->send_document($path, 'Telegram Backup: document delivery test. No website data was sent.');
+                chmod($path, 0600); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Private temporary diagnostic file must be owner-readable only before upload; no credentials-based filesystem transport is suitable.
+                $message = $this->send_document($path, 'TG Backup: document delivery test. No website data was sent.');
                 $add('upload', 'Document delivery', true, 'Telegram confirmed message #' . (string) $message['message_id'] . '. Check it in the selected chat.');
             } catch (\Throwable $error) {
                 $add('upload', 'Document delivery', false, $this->redact($error->getMessage()));
             } finally {
                 if ($path !== '' && is_file($path)) {
-                    unlink($path);
+                    wp_delete_file($path);
                 }
             }
         } else {
@@ -264,7 +281,7 @@ final class Telegram
         if (preg_match('/[\x00-\x20\x7f]/', $url)) {
             throw new TelegramException('The server address contains spaces or control characters.');
         }
-        $parts = parse_url($url);
+        $parts = wp_parse_url($url);
         if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host']) || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment']) || (isset($parts['port']) && ($parts['port'] < 1 || $parts['port'] > 65535))) {
             throw new TelegramException('Invalid URL: a scheme and host are required, without credentials, query parameters, or a fragment.');
         }
@@ -287,15 +304,11 @@ final class Telegram
         return false;
     }
 
-    /** Configure exactly the same DNS, proxy, trust and redirect policy for every operation. */
-    private function make_handle(bool $upload): \CurlHandle
+    /** Options for WordPress's cURL transport; unsupported capabilities fail before a request. */
+    private function curl_options(bool $upload): array
     {
-        if (!extension_loaded('curl')) {
+        if (!extension_loaded('curl') || !class_exists('CURLFile')) {
             throw new TelegramException('PHP cURL is not installed on the server. Contact your hosting provider.');
-        }
-        $handle = curl_init();
-        if ($handle === false) {
-            throw new TelegramException('Could not initialize a cURL connection.');
         }
         $timeout = $upload ? (($this->settings['api_mode'] ?? 'cloud') === 'local' ? 3600 : 600) : 30;
         $options = [
@@ -309,11 +322,16 @@ final class Telegram
             CURLOPT_LOW_SPEED_LIMIT => 32,
             CURLOPT_LOW_SPEED_TIME => 60,
             CURLOPT_NOSIGNAL => true,
-            CURLOPT_USERAGENT => 'ParcelBackups/' . (defined('PARCEL_VERSION') ? PARCEL_VERSION : '1.0.0'),
+            CURLOPT_USERAGENT => 'TGBackup/' . (defined('PARCEL_VERSION') ? PARCEL_VERSION : '1.0.1'),
             // Disable environment proxies and NO_PROXY bypasses: the UI is authoritative.
             CURLOPT_PROXY => '',
+            CURLOPT_PROXYTYPE => CURLPROXY_HTTP,
+            CURLOPT_PROXYUSERNAME => '',
+            CURLOPT_PROXYPASSWORD => '',
             CURLOPT_NOPROXY => '',
-            CURLOPT_HTTPHEADER => ['Accept: application/json', 'Expect:'],
+            CURLOPT_HTTPHEADER => ['Accept: application/json', 'Accept-Encoding: identity', 'Expect:', 'Connection: close'],
+            // Bound decoding ourselves: Requests otherwise retries malformed compressed responses.
+            CURLOPT_HTTP_CONTENT_DECODING => false,
         ];
         if (defined('CURLOPT_PROTOCOLS_STR')) {
             $options[constant('CURLOPT_PROTOCOLS_STR')] = 'http,https';
@@ -326,14 +344,12 @@ final class Telegram
             $scheme = strtolower($parts['scheme']);
             $constant = ['http' => 'CURLPROXY_HTTP', 'https' => 'CURLPROXY_HTTPS', 'socks5' => 'CURLPROXY_SOCKS5', 'socks5h' => 'CURLPROXY_SOCKS5_HOSTNAME'][$scheme];
             if (!defined($constant)) {
-                unset($handle);
                 throw new TelegramException('This cURL build does not support the selected proxy type.');
             }
             $options[CURLOPT_PROXY] = $proxy;
             $options[CURLOPT_PROXYTYPE] = constant($constant);
             if ($scheme === 'https') {
                 if (!defined('CURLOPT_PROXY_SSL_VERIFYPEER') || !defined('CURLOPT_PROXY_SSL_VERIFYHOST')) {
-                    unset($handle);
                     throw new TelegramException('An HTTPS proxy requires a cURL build that can verify its TLS certificate.');
                 }
                 $options[constant('CURLOPT_PROXY_SSL_VERIFYPEER')] = true;
@@ -349,7 +365,6 @@ final class Telegram
         if ($dns !== '') {
             $version = curl_version();
             if (!defined('CURLOPT_DNS_SERVERS') || empty($version['ares'])) {
-                unset($handle);
                 throw new TelegramException('A DNS server list requires PHP cURL with c-ares and CURLOPT_DNS_SERVERS. Your host does not support this setting; it was not silently ignored. Try DoH without a proxy, or socks5h.');
             }
             $options[constant('CURLOPT_DNS_SERVERS')] = implode(',', array_map('trim', explode(',', $dns)));
@@ -358,7 +373,6 @@ final class Telegram
         if ($doh !== '') {
             foreach (['CURLOPT_DOH_URL', 'CURLOPT_DOH_SSL_VERIFYPEER', 'CURLOPT_DOH_SSL_VERIFYHOST'] as $constant) {
                 if (!defined($constant)) {
-                    unset($handle);
                     throw new TelegramException('This PHP cURL build does not support DoH with explicit TLS verification. Update PHP/cURL or choose another DNS mode.');
                 }
             }
@@ -366,20 +380,7 @@ final class Telegram
             $options[constant('CURLOPT_DOH_SSL_VERIFYPEER')] = true;
             $options[constant('CURLOPT_DOH_SSL_VERIFYHOST')] = 2;
         }
-        try {
-            foreach ($options as $option => $value) {
-                if (!curl_setopt($handle, $option, $value)) {
-                    throw new TelegramException('cURL could not apply a network setting. The request was not sent; check DNS and proxy support with your hosting provider.');
-                }
-            }
-        } catch (\Throwable $error) {
-            unset($handle);
-            if ($error instanceof TelegramException) {
-                throw $error;
-            }
-            throw new TelegramException('cURL does not support one of the selected network settings. The request was not sent.');
-        }
-        return $handle;
+        return $options;
     }
 
     private function transport(string $method, array $params, ?string $file = null): array
@@ -396,67 +397,142 @@ final class Telegram
             }
             return $this->decode_envelope($override, 200);
         }
-        $handle = $this->make_handle($file !== null);
-        $body = '';
-        $overflow = false;
-        $httpRetryAfter = 0;
+        $options = $this->curl_options($file !== null);
+        $url = $this->endpoint() . '/bot' . $this->token . '/' . $method;
+        $marker = bin2hex(random_bytes(16));
+        $configured = false;
+        $failure = null;
+        $headers = ['Accept' => 'application/json', 'X-TG-Backup-Request' => $marker];
+        // Do not hand CURLFile to Requests: it would serialize it with http_build_query.
+        $body = $file === null ? http_build_query($params, '', '&', PHP_QUERY_RFC3986) : '';
+        $prepare = static function (&$requestUrl, &$requestHeaders, &$data, &$type, &$requestOptions) use ($url, $marker, &$failure): void {
+            if (($requestHeaders['X-TG-Backup-Request'] ?? null) !== $marker) { return; }
+            unset($requestHeaders['X-TG-Backup-Request']);
+            if ($requestUrl !== $url || !class_exists('WpOrg\\Requests\\Transport\\Curl')) {
+                $failure = 'WordPress could not provide the required cURL transport for this request.';
+                throw new \WpOrg\Requests\Exception($failure, 'tg_backup_transport'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
+            }
+            // Public Requests hooks are bridged by WordPress. Selection is per request, never global.
+            $requestOptions['transport'] = \WpOrg\Requests\Transport\Curl::class;
+            $requestOptions['verify'] = is_string($requestOptions['verify'] ?? null) && $requestOptions['verify'] !== '' ? $requestOptions['verify'] : true;
+            $requestOptions['verifyname'] = true;
+            $requestOptions['follow_redirects'] = false;
+            $requestOptions['redirects'] = 0;
+            $requestOptions['blocking'] = true;
+            $requestOptions['filename'] = false;
+            $requestOptions['max_bytes'] = self::MAX_RESPONSE_BYTES + 1;
+            $type = 'POST';
+            $requestOptions['type'] = 'POST';
+            // Throw before the cURL write callback returns. Returning 0 would trigger Requests' hidden retry.
+            $requestOptions['hooks']->register('request.progress', static function ($chunk, $received) use (&$failure): void {
+                if ($received + strlen($chunk) > self::MAX_RESPONSE_BYTES) {
+                    $failure = 'The Bot API response is too large. Check the server address and pending updates queue.';
+                    throw new \WpOrg\Requests\Exception($failure, 'tg_backup_response_size'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
+                }
+            });
+            // Decode a compressed response ourselves with a strict expanded-size bound. Native
+            // Requests decompression is unbounded, and its cURL encoding fallback can repeat a POST.
+            $requestOptions['hooks']->register('requests.before_parse', static function (&$response) use (&$failure): void {
+                $end = strpos($response, "\r\n\r\n");
+                if ($end === false) { return; }
+                $head = substr($response, 0, $end);
+                if (!preg_match('/^Content-Encoding:[ \t]*([^\r\n]+)/im', $head, $encoding)) { return; }
+                $encoding = strtolower(trim($encoding[1]));
+                if ($encoding === 'identity') { return; }
+                $payload = substr($response, $end + 4);
+                $decoded = in_array($encoding, ['gzip', 'deflate'], true) ? @zlib_decode($payload, self::MAX_RESPONSE_BYTES + 1) : false;
+                if ($decoded === false || strlen($decoded) > self::MAX_RESPONSE_BYTES) {
+                    $failure = 'The encoded Bot API response is invalid, unsupported, or too large.';
+                    throw new \WpOrg\Requests\Exception($failure, 'tg_backup_response_encoding'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
+                }
+                $head = preg_replace('/^(?:Content-Encoding|Content-Length):[^\r\n]*\r\n/im', '', $head . "\r\n");
+                $response = $head . "\r\n" . $decoded;
+            });
+        };
+        $configure = static function ($handle, $args, $requestUrl) use ($url, $marker, $options, $params, $file, &$configured, &$failure): void {
+            if ($requestUrl !== $url || ($args['_tg_backup_request'] ?? null) !== $marker) { return; }
+            try {
+                $requestOptions = $options;
+                $requestOptions[CURLOPT_POSTFIELDS] = $file === null
+                    ? http_build_query($params, '', '&', PHP_QUERY_RFC3986)
+                    : $params + ['document' => new \CURLFile($file, 'application/octet-stream', basename($file))];
+                foreach ($requestOptions as $option => $value) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt -- Configure the documented http_api_curl hook: WordPress owns execution; streamed multipart, SOCKS and DNS have no equivalent request arguments.
+                    if (!curl_setopt($handle, $option, $value)) {
+                        throw new \RuntimeException('Unsupported cURL option.');
+                    }
+                }
+                $configured = true;
+            } catch (\Throwable $error) {
+                $failure = 'WordPress cURL could not apply the selected network settings. The request was not sent; check DNS and proxy support on the host.';
+                throw new \WpOrg\Requests\Exception($failure, 'tg_backup_network_options'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
+            }
+        };
+        add_action('requests-requests.before_request', $prepare, PHP_INT_MAX, 5);
+        add_action('http_api_curl', $configure, PHP_INT_MAX, 3);
         try {
-            curl_setopt($handle, CURLOPT_URL, $this->endpoint() . '/bot' . $this->token . '/' . $method);
-            curl_setopt($handle, CURLOPT_WRITEFUNCTION, static function ($handle, string $chunk) use (&$body, &$overflow): int {
-                if (strlen($body) + strlen($chunk) > self::MAX_RESPONSE_BYTES) {
-                    $overflow = true;
-                    return 0;
-                }
-                $body .= $chunk;
-                return strlen($chunk);
-            });
-            curl_setopt($handle, CURLOPT_HEADERFUNCTION, static function ($handle, string $line) use (&$httpRetryAfter): int {
-                if (preg_match('/^Retry-After:\s*([0-9]+)\s*$/i', trim($line), $match)) {
-                    $httpRetryAfter = min(604800, (int) $match[1]);
-                }
-                return strlen($line);
-            });
-            if ($file !== null) {
-                // CURLFile streams from disk; never concatenate multipart bodies in PHP memory.
-                $params['document'] = new \CURLFile($file, 'application/octet-stream', basename($file));
-                curl_setopt($handle, CURLOPT_POSTFIELDS, $params);
-            } else {
-                curl_setopt($handle, CURLOPT_POSTFIELDS, http_build_query($params, '', '&', PHP_QUERY_RFC3986));
-            }
-            $success = curl_exec($handle);
-            $error = curl_errno($handle);
-            $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-            if ($overflow) {
-                throw new TelegramException('The Bot API response is too large. Check the server address and pending updates queue.');
-            }
-            if ($success === false || $error !== 0) {
-                $retry = in_array($error, [5, 6, 7, 16, 18, 28, 35, 52, 55, 56, 81, 92, 95], true);
-                $message = match ($error) {
-                    5 => 'Could not resolve the proxy hostname through DNS.',
-                    6 => 'Could not resolve the Bot API hostname through the selected DNS.',
-                    7 => 'Could not connect to the Bot API or proxy.',
-                    28 => 'The connection or upload timed out.',
-                    35, 51, 58, 60, 77, 83, 90, 91 => 'TLS error: check the server certificate, proxy certificate, and trusted hosting CAs. TLS verification remains enabled.',
-                    97 => 'Proxy rejected the connection: check its type, address, and credentials.',
-                    default => 'cURL network error (' . $error . '). Check connectivity, DNS, and proxy settings.',
-                };
-                if ($file !== null && $retry) {
-                    $message .= ' Delivery may have completed before the connection broke; retrying can create a duplicate.';
-                }
-                throw new TelegramException($message, $retry, $retry ? 60 : 0, $error);
-            }
-            if ($status >= 300 && $status < 400) {
-                throw new TelegramException('The Bot API returned a redirect. Enter the final address; redirects are disabled to protect the token.');
-            }
-            $decoded = json_decode($body, true, 64, JSON_BIGINT_AS_STRING);
-            if (!is_array($decoded)) {
-                $retry = $status >= 500 || $status === 429 || $status === 408;
-                throw new TelegramException('The Bot API returned a non-JSON response (HTTP ' . $status . '). Check the server address and proxy.', $retry, $retry ? max(60, $httpRetryAfter) : 0, $status);
-            }
-            return $this->decode_envelope($decoded, $status, $httpRetryAfter);
+            $response = wp_remote_post($url, [
+                '_tg_backup_request' => $marker,
+                'headers' => $headers,
+                'body' => $body,
+                'timeout' => $options[CURLOPT_TIMEOUT],
+                'redirection' => 0,
+                'sslverify' => true,
+                'blocking' => true,
+                'stream' => false,
+                'compress' => false,
+                'decompress' => false,
+                'limit_response_size' => self::MAX_RESPONSE_BYTES + 1,
+                'user-agent' => $options[CURLOPT_USERAGENT],
+            ]);
+        } catch (\Throwable $error) {
+            throw new TelegramException($failure ?? 'WordPress HTTP API could not complete this request: ' . $this->redact(self::clip($error->getMessage(), 350))); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
         } finally {
-            unset($handle);
+            remove_action('requests-requests.before_request', $prepare, PHP_INT_MAX);
+            remove_action('http_api_curl', $configure, PHP_INT_MAX);
         }
+        if ($failure !== null) { throw new TelegramException($failure); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
+        if (is_wp_error($response)) {
+            $error = 0;
+            if (preg_match('/\bcURL error ([0-9]+):/', $response->get_error_message(), $match)) { $error = (int) $match[1]; }
+            $this->network_error($error, $file !== null);
+        }
+        if (!$configured) {
+            throw new TelegramException('WordPress intercepted the request before the required network settings were applied. No delivery receipt was accepted.');
+        }
+        $status = (int) wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        if (strlen($body) > self::MAX_RESPONSE_BYTES) {
+            throw new TelegramException('The Bot API response is too large. Check the server address and pending updates queue.');
+        }
+        if ($status >= 300 && $status < 400) {
+            throw new TelegramException('The Bot API returned a redirect. Enter the final address; redirects are disabled to protect the token.');
+        }
+        $retryHeader = trim((string) wp_remote_retrieve_header($response, 'retry-after'));
+        $httpRetryAfter = ctype_digit($retryHeader) ? min(604800, (int) $retryHeader) : 0;
+        $decoded = json_decode($body, true, 64, JSON_BIGINT_AS_STRING);
+        if (!is_array($decoded)) {
+            $retry = $status >= 500 || $status === 429 || $status === 408;
+            throw new TelegramException('The Bot API returned a non-JSON response (HTTP ' . $status . '). Check the server address and proxy.', $retry, $retry ? max(60, $httpRetryAfter) : 0, $status); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
+        }
+        return $this->decode_envelope($decoded, $status, $httpRetryAfter);
+    }
+
+    private function network_error(int $error, bool $upload): void
+    {
+        $retry = in_array($error, [5, 6, 7, 16, 18, 28, 35, 52, 55, 56, 81, 92, 95], true);
+        $message = match ($error) {
+            5 => 'Could not resolve the proxy hostname through DNS.',
+            6 => 'Could not resolve the Bot API hostname through the selected DNS.',
+            7 => 'Could not connect to the Bot API or proxy.',
+            28 => 'The connection or upload timed out.',
+            35, 51, 58, 60, 77, 83, 90, 91 => 'TLS error: check the server certificate, proxy certificate, and trusted hosting CAs. TLS verification remains enabled.',
+            97 => 'Proxy rejected the connection: check its type, address, and credentials.',
+            0 => 'WordPress HTTP API could not complete this request. Check HTTP restrictions and the host network settings.',
+            default => 'cURL network error (' . $error . '). Check connectivity, DNS, and proxy settings.',
+        };
+        if ($upload && $retry) { $message .= ' Delivery may have completed before the connection broke; retrying can create a duplicate.'; }
+        throw new TelegramException($message, $retry, $retry ? 60 : 0, $error); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
     }
 
     private function decode_envelope(array $body, int $httpStatus, int $httpRetryAfter = 0): array
@@ -468,7 +544,7 @@ final class Telegram
         $parameters = is_array($body['parameters'] ?? null) ? $body['parameters'] : [];
         if (isset($parameters['migrate_to_chat_id'])) {
             $id = preg_replace('/[^0-9-]/', '', (string) $parameters['migrate_to_chat_id']);
-            throw new TelegramException('The group was migrated to a supergroup. Verify and save the new Chat ID: ' . $id . '. The destination was not changed automatically.', false, 0, $code);
+            throw new TelegramException('The group was migrated to a supergroup. Verify and save the new Chat ID: ' . $id . '. The destination was not changed automatically.', false, 0, $code); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
         }
         $retry = $code === 429 || $httpStatus === 429 || $code === 408 || $httpStatus === 408 || $code >= 500 || $httpStatus >= 500;
         $delay = $retry ? max(1, min(604800, (int) ($parameters['retry_after'] ?? ($httpRetryAfter ?: 60)))) : 0;
@@ -486,7 +562,7 @@ final class Telegram
         if ($description !== '' && $code !== 429) {
             $hint .= ' ' . $description;
         }
-        throw new TelegramException($hint, $retry, $delay, $code);
+        throw new TelegramException($hint, $retry, $delay, $code); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are JSON/CLI data, escaped by the UI at display; retry metadata must retain its native type.
     }
 
     private function network_description(): string
@@ -494,7 +570,7 @@ final class Telegram
         $parts = [($this->settings['api_mode'] ?? 'cloud') === 'local' ? 'Local Bot API, parts up to 1900 MiB.' : 'Telegram Cloud Bot API, parts up to 45 MiB.'];
         $proxy = trim((string) ($this->settings['proxy_url'] ?? ''));
         if ($proxy !== '') {
-            $scheme = strtolower((string) parse_url($proxy, PHP_URL_SCHEME));
+            $scheme = strtolower((string) wp_parse_url($proxy, PHP_URL_SCHEME));
             $parts[] = 'Proxy ' . strtoupper($scheme) . '.';
             if (in_array($scheme, ['http', 'https', 'socks5h'], true)) {
                 $parts[] = 'The proxy resolves the Bot API hostname; local DNS settings do not control the proxy DNS.';

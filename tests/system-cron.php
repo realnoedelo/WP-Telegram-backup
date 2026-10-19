@@ -9,7 +9,7 @@ namespace {
     $base = sys_get_temp_dir() . '/telegram-system-cron-test-' . bin2hex(random_bytes(5)); mkdir($base, 0700);
     mkdir($base . '/site',0700); mkdir($base . '/storage',0700);
     define('ABSPATH', $base . '/site/'); define('DB_NAME', 'fixture'); define('PARCEL_DIR', dirname(__DIR__) . '/');
-    define('PARCEL_FILE', dirname(__DIR__) . '/telegram-backup.php'); define('TELEGRAM_BACKUP_STORAGE_DIR', $base . '/storage');
+    define('PARCEL_FILE', dirname(__DIR__) . '/tg-backup.php'); define('TELEGRAM_BACKUP_STORAGE_DIR', $base . '/storage');
     \ParcelBackups\Storage::$directory = $base . '/storage'; $wpdb = (object)['prefix'=>'wp_'];
     $options=[]; $transients=[];
     function get_option($k,$d=false) { global $options; return $options[$k]??$d; }
@@ -100,7 +100,7 @@ CODE;
 
     resetFixture();state('table',$unrelated);SystemCron::install();$different=$env;$different['uid']=502;environment($different);rejects(fn()=>SystemCron::remove(),'different Unix owner cannot remove prior install');environment($env);
 
-    resetFixture();state('table',$unrelated);$h=fopen($base.'/.telegram-backup-crontab-'.posix_geteuid().'.lock','c+');flock($h,LOCK_EX);rejects(fn()=>SystemCron::install(),'concurrent installation lock honored');flock($h,LOCK_UN);fclose($h);
+    resetFixture();state('table',$unrelated);$h=fopen($base.'/.tg-backup-crontab-'.posix_geteuid().'.lock','c+');flock($h,LOCK_EX);rejects(fn()=>SystemCron::install(),'concurrent installation lock honored');flock($h,LOCK_UN);fclose($h);
 
 
     resetFixture();state('table',$unrelated);SystemCron::install();$oldStorage=\ParcelBackups\Storage::$directory;\ParcelBackups\Storage::$directory=$base.'/missing-storage';SystemCron::remove();check(file_get_contents($base.'/table')===$unrelated,'remove works even when backup storage is unavailable');\ParcelBackups\Storage::$directory=$oldStorage;

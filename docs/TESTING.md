@@ -1,4 +1,30 @@
-# Version 1.0.0 verification
+# Version 1.0.1 verification
+
+Rechecked on October 19, 2026, using WordPress 7.1.3, PHP 8.5.11, MariaDB 13.0.2 and Chromium in a disposable local installation. No live Telegram token or recipient was supplied.
+
+- **Archive/recovery:** all 15 cases passed, including an actual 2,147,495,993-byte source file restored with matching SHA-256.
+- **WordPress HTTP transport:** 137 checks passed against actual WordPress 6.5 and 7.1.3 HTTP/Requests code. Coverage includes streaming 20 MiB multipart, HTTP/SOCKS proxies, errors/rate limits, redirect refusal, nested request isolation, hook cleanup, compressed responses and bounded oversized/malformed response handling without hidden replay. Eight additional checks passed inside a fully bootstrapped WordPress installation.
+- **Single status message:** 25 queue tests passed for initial-send persistence, throttling, progress and terminal edits, delayed terminal recovery, six-attempt terminal retry limit, deleted messages, ambiguous initial responses, links, private-chat fallback and message length. No additional announcement is sent after a timeout or restart.
+- **Full backup:** 6,911 source files, 14 encrypted parts, 53,226,167 archive bytes, 46 MiB peak memory. A simulated 429 caused a real delayed queue retry; every part and helper was acknowledged before completion. Standalone recovery verified 6,912 files (including SQL) and 1,080 directories.
+- **SQL restoration:** restored into separate databases and compared Unicode, NULL, binary/BLOB, JSON, unsigned BIGINT, DECIMAL, BIT/BIT64, latin1/utf8mb4, VARBINARY and TIMESTAMP values with a different time zone. The source session time zone was preserved and plugin secret options were excluded. The restored WordPress homepage ran on a separate local port and displayed the original site title.
+- **Storage/settings:** 67 checks passed without modifying saved fixture options or job history. Upgrade from the old folder preserved the saved settings byte-for-byte.
+- **System cron:** all 39 isolated fake-crontab checks passed; they do not change the developer machine's crontab.
+- **Native interface:** five tabs at 1440 px and 390 px, no JavaScript errors or horizontal overflow. Connection fields, consent, logs, selection and cron-action mocks passed.
+
+The current test commands are:
+
+```sh
+php tests/archive.php --large
+php tests/telegram-test.php --http --wp=/path/to/wordpress
+php tests/engine-status.php
+php tests/system-cron.php
+PARCEL_TEST=1 php tests/storage-wordpress-test.php --wp=/path/to/disposable-wordpress --scratch=/private/test-work
+PARCEL_TEST=1 wp --path=/path/to/disposable-wordpress --skip-plugins eval-file tests/telegram-wordpress-test.php
+```
+
+The HTTP fixture loads the real core transport without a database. The last two commands require a disposable database-backed installation. All Telegram fixtures use fictional credentials and local HTTP servers. Plugin Check findings and deliberate API exceptions are documented separately in [WordPress review notes](WORDPRESS-REVIEW.md); tests do not constitute directory approval or an independent security audit.
+
+## Version 1.0.0 verification
 
 Archive and restore checks were performed on October 19, 2026, in an isolated local environment: **WordPress 7.1.3, PHP 8.5.11 (64-bit), MariaDB 13.0.2**, and Chromium. No real Telegram chats were used in these checks.
 
@@ -10,7 +36,7 @@ Installation was also verified on a separate staging site running **WordPress 7.
 | --- | --- | --- |
 | Full WordPress backup | 3,808 source files, 13 parts, 47,725,456 bytes of encrypted archive data | Full cycle reached confirmed completion using the test transport |
 | Website restoration | Decryption, SHA-256 comparison, SQL import into a new database, and the restored WordPress site running on another port | Homepage showed the original title and published post |
-| SQL | NULL, Unicode, binary/BLOB, JSON, BIT, BIT64, unsigned BIGINT, DECIMAL, latin1/utf8mb4, and TIMESTAMP with a different time zone | Values and binary representations matched; Telegram Backup settings and secrets were absent from the dump |
+| SQL | NULL, Unicode, binary/BLOB, JSON, BIT, BIT64, unsigned BIGINT, DECIMAL, latin1/utf8mb4, and TIMESTAMP with a different time zone | Values and binary representations matched; TG Backup settings and secrets were absent from the dump |
 | Large source file | A real streaming round trip of a 2,147,495,993-byte file, including data on both sides of the 2 GiB boundary | Restored size and SHA-256 matched |
 | Archive and restore | 15 scenarios: encryption, Unicode, empty files, multipart archives, wrong passwords, corruption/truncation/trailing data, missing parts, unsafe paths, checkpoint recovery, and size limits | Passed |
 | Telegram transport | 98 checks, including real local 20 MiB multipart uploads, HTTP proxies, SOCKS5/SOCKS5H, proxy authentication, IP/hostname handling in SOCKS, 429/503, and blocked redirects | Passed without contacting real Telegram servers |
@@ -33,7 +59,7 @@ From the plugin source directory:
 php tests/archive.php
 php tests/archive.php --large
 php tests/telegram-test.php
-php tests/telegram-test.php --http
+php tests/telegram-test.php --http --wp=/path/to/wordpress
 php tests/system-cron.php
 ```
 
@@ -58,4 +84,4 @@ The suite uses its own temporary storage directory and settings overridden only 
 
 The English release was rechecked after translation: all 21 PHP files retained identical non-text tokens; archive (14), transport (98), storage/settings (57), and system cron (39) checks passed again. The English interface passed five-tab browser checks at 1440 px and 390 px, plus mocked action and cron-control scenarios, with no JavaScript errors or horizontal overflow. Unicode filenames remain in archive test fixtures intentionally.
 
-The interface uses standard WordPress administration elements: tabs, tables, forms, notices, and buttons. The public plugin name is **Telegram Backup**.
+The interface uses standard WordPress administration elements: tabs, tables, forms, notices, and buttons. The public plugin name is **TG Backup**.

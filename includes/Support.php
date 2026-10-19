@@ -21,7 +21,7 @@ final class Support {
                 $lines=file($path,FILE_IGNORE_NEW_LINES) ?: [];
                 file_put_contents($path,implode("\n",array_slice($lines,-200))."\n",LOCK_EX);
             }
-            file_put_contents($path,$line,FILE_APPEND|LOCK_EX); @chmod($path,0600);
+            file_put_contents($path,$line,FILE_APPEND|LOCK_EX); @chmod($path,0600); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Enforce private log permissions on local backup storage.
         } catch (\Throwable $e) { /* Logging must not expose sensitive paths to PHP logs or abort recovery. */ }
     }
     public static function logs(string $id=''): array {

@@ -1,4 +1,4 @@
-# Telegram Backup Vault v1 — open archive format
+# TG Backup archive format v1
 
 [Back to README](../README.md)
 
@@ -89,9 +89,9 @@ chain = SHA256(previous_chain_bytes || SHA256(chunk_bytes))
 
 `manifest.json` contains the UUID, time, backup type, file count, and each part's name, size in bytes and ordinary SHA-256. It helps with transfers and download checks, but it is not a trust anchor: the manifest has no digital signature. The encrypted records and part chain establish authenticity, order and completeness. Recovery can work without the manifest.
 
-A job is marked as delivered only after Telegram confirms every part, the manifest, the standalone `restore.php` and the final completion message. Each confirmation and its `message_id` are saved locally. After a network timeout, Telegram may have received a file even though the response was lost; a retry may create a duplicate. For recovery, choose one complete, sequential set with a single UUID. Local retention policies do not delete Telegram messages.
+A job is marked as delivered only after Telegram confirms every part, the manifest and the standalone `restore.php`. Each confirmation and its `message_id` are saved locally. A separate, optional status message is edited with progress and completion; status failures do not change archive delivery success. Documents are sent silently but remain separate chat messages. After a network timeout, Telegram may have received a file even though the response was lost; a retry may create a duplicate. For recovery, choose one complete, sequential set with a single UUID. Local retention policies do not delete Telegram messages.
 
-The manifest contains no secrets. `restore.php` is open source, not a secret. Do not execute an unknown modified recovery tool; use a trusted copy from the plugin's source code.
+The manifest is sent unencrypted and exposes backup metadata, including job ID, time, type, counts, part names, sizes and hashes. Captions and the edited status message also carry plaintext job metadata and error summaries. The recovery script is sent as unencrypted source code. None of these contains the archive password or decrypted site file contents. Do not execute an unknown modified recovery tool; use a trusted copy from the plugin's source code.
 
 ## Checkpoints and limits
 
@@ -106,7 +106,7 @@ The default storage location is a private system temporary directory. For long-t
 Download every part of one job into a separate directory. For example:
 
 ```sh
-php restore.php --input=/backup/parcel-2026-10-19 --output=/recovery/test-copy
+php restore.php --input=/backup/site-2026-10-19 --output=/recovery/test-copy
 ```
 
 A compatible Unix terminal prompts for the password without displaying it. For automation, use `--password-stdin` or the `TELEGRAM_BACKUP_PASSWORD` environment variable; passwords must not be passed as command-line arguments. The output directory's parent must already exist. The output directory itself must be new or completely empty.
@@ -116,6 +116,7 @@ The recovery tool:
 - does not modify the current site or connect to a database;
 - rejects file overwrites, path traversal, symbolic links inside the output, mixed or missing parts, incorrect passwords and corrupted records;
 - creates files with mode `0600` and directories with mode `0700`; recorded source permissions are not applied automatically;
+- attempts to restore source modification times, applying directory times after extraction;
 - leaves `PARCEL-INCOMPLETE.txt` on failure; do not deploy that output;
 - creates `PARCEL-VERIFIED.json` after full verification and removes the incomplete marker.
 

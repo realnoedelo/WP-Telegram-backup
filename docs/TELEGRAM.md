@@ -1,6 +1,6 @@
 # Telegram: from creating a bot to your first backup
 
-Telegram Backup is a free, open-source plugin. You own the bot you create. You do not need a Telegram Backup subscription, a third-party backup service, or Telegram Premium. Your hosting, Local Bot API server, or proxy provider may charge for their services.
+TG Backup is a free, open-source plugin. You need a Telegram account and own the bot you create. You do not need a TG Backup subscription, a third-party backup service, or Telegram Premium. Your hosting, Local Bot API server, or proxy provider may charge for their services.
 
 ## 1. Create a dedicated bot
 
@@ -9,13 +9,13 @@ Telegram Backup is a free, open-source plugin. You own the bot you create. You d
 3. Copy the Bot Token into **Settings → TG Backup → Connection**. The token grants control of your bot. Do not send it to support, publish screenshots of the token field, or paste it into a browser address bar.
 4. Open your new bot and press **Start**. A bot cannot initiate a private conversation with a user.
 
-Jobs are managed in WordPress. In Telegram, the bot delivers files and captions. Messages or commands sent to the bot do not trigger website restoration, deletion, or backup jobs.
+Jobs are managed in WordPress. In Telegram, the bot delivers separate silent document messages and attempts one status message per job, updated in place. Messages or commands sent to the bot do not trigger website restoration, deletion, or backup jobs.
 
 A dedicated backup bot avoids conflicts with another service that already consumes the bot's incoming messages. If the token is exposed, revoke it through BotFather and save the replacement in the plugin.
 
 ## 2. Choose a destination
 
-For a private chat, press Start, then use **Find chats** and select yourself. The plugin inspects the first 100 pending updates without acknowledging or deleting them. If your chat is missing, send the bot a new message. Chats whose updates have already been consumed by another application may not appear; you can enter the Chat ID manually.
+For a private chat, press Start, then use **Find chat from a message** and select yourself. The plugin inspects the first 100 pending updates without acknowledging or deleting them. If your chat is missing, send the bot a new message. Chats whose updates have already been consumed by another application may not appear; you can enter the Chat ID manually.
 
 For a group, add the bot and send `/start@your_bot_username`. The bot must have permission to send messages and documents. For a group topic, send the command inside that topic, then select the discovered topic or enter its positive Thread ID separately. Group IDs often begin with `-100`; keep the minus sign.
 
@@ -37,7 +37,7 @@ The ordinary connection check sends no messages to the chat. Use **Send test fil
 
 ## 4. File size: two API modes
 
-| Mode | Official upload limit | Telegram Backup part limit | Requirements |
+| Mode | Official upload limit | TG Backup part limit | Requirements |
 | --- | --- | --- | --- |
 | Telegram Cloud Bot API | 50 MB | 45 MiB; 40 MiB by default | Bot token and access to `api.telegram.org` |
 | Your own Local Bot API Server | 2000 MB | 1900 MiB | A separately installed Bot API server running in `--local` mode |
@@ -61,9 +61,23 @@ This is separate infrastructure; the plugin does not install it automatically. D
 
 At an outgoing speed of 10 Mbit/s, a 1900 MiB part takes about 27 minutes to upload, excluding overhead. The transport allows up to 60 minutes per local upload and 10 minutes per cloud upload. PHP-FPM, web server, or hosting limits may terminate the request sooner. Choose smaller parts on ordinary shared hosting. For large parts, use a reliable cron/CLI worker as described in the main plugin instructions.
 
+## What is sent to Telegram
+
+Archive parts contain encrypted site data. Job captions and the status message, `manifest.json`, and the recovery script are sent unencrypted. They include job IDs, dates, backup type, counts, part filenames, sizes, hashes and error summaries. The archive password is never sent. Telegram bot conversations are not end-to-end encrypted; archive payload protection comes from encryption on your WordPress server before upload.
+
+## One status message, silent documents
+
+When work starts, the plugin attempts to send one status message for the job. It edits the same message with the stage, estimated overall progress, archive size and number of parts delivered. Normal progress edits are spaced at least 30 seconds apart; completion, retry, failure and cancellation also attempt an update. This is not a live byte counter or an upload-time estimate.
+
+Archive parts, `manifest.json` and `restore.php` are separate document messages with silent delivery requested (`disable_notification=true`). They remain visible in the chat. Telegram defines silent delivery as a notification without sound; clients may still show silent notifications. To stop per-file notifications, mute the destination chat in Telegram. The initial status message follows the same chat notification settings.
+
+For public channels/supergroups, links use the public username. Private supergroup/channel links require access to that chat. A status message includes at most 10 part links plus the manifest and recovery tool; find additional documents using the job ID. **Private one-to-one bot chats and basic groups do not have supported native message permalinks.** The plugin does not publish archives to obtain public links.
+
+Status reporting is best effort. If its initial response is lost, the plugin does not send a replacement announcement, avoiding duplicate announcements. If an edit fails, backup processing continues, and the failure is logged in WordPress. A deleted or inaccessible status message may remain unavailable. Use the WordPress job state and the actual downloaded archive to verify the result.
+
 ## What “delivered” means
 
-Delivery requires a Telegram response containing a `message_id` for each part. Validating the token or starting the queue does not mean the backup has been delivered. After a network interruption, Telegram may have accepted a document even if WordPress did not receive the response. A retry can create a duplicate; matching part filenames and job IDs help identify it.
+Delivery requires Telegram confirmation for every part, the manifest and the recovery tool. The optional status message is not part of that delivery condition. Validating the token or starting the queue does not mean the backup has been delivered. After a network interruption, Telegram may have accepted a document even if WordPress did not receive the response. A retry can create a duplicate; matching part filenames and job IDs help identify it.
 
 Local deletion and retention rules apply to the WordPress server. Documents in Telegram are not deleted automatically. The plugin does not measure free space in a Telegram account, on the recipient's devices, or on a separate Local Bot API server.
 

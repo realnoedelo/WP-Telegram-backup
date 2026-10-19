@@ -63,10 +63,10 @@ final class Engine
                     $job = $candidate; break;
                 }
             }
-            if (!$job) { return; }
+            if (!$job) { self::retry_terminal_status($jobs); return; }
             $checkpoint = $job;
             if (is_file(Storage::job_dir($job['id']) . '/cancel.request')) {
-                self::apply_cancel($job); self::save($job); return;
+                self::apply_cancel($job); self::save($job); self::sync_status($job, true); return;
             }
             if (!hash_equals($job['settings_fingerprint'], self::fingerprint())) {
                 throw new \RuntimeException('The settings or password have changed. Create a new job.');
@@ -75,7 +75,7 @@ final class Engine
             $job['status'] = 'running';
             $job['error'] = '';
             $job['retry_at'] = 0;
-            self::save($job); $checkpoint = $job;
+            self::save($job); self::sync_status($job); $checkpoint = $job;
             $dir = Storage::job_dir($job['id']);
             Archive::recover($dir, $job['archive_state']);
             self::recover_index($dir, $job);
@@ -83,7 +83,7 @@ final class Engine
             $settings = Settings::get();
             while (microtime(true) < $deadline && $job['status'] === 'running') {
                 if (is_file($dir . '/cancel.request')) {
-                    self::apply_cancel($job); self::save($job); $checkpoint = $job; break;
+                    self::apply_cancel($job); self::save($job); self::sync_status($job, true); $checkpoint = $job; break;
                 }
                 switch ($job['stage']) {
                     case 'scan': self::scan_step($job, $deadline); break;
@@ -92,7 +92,7 @@ final class Engine
                     case 'send': self::send_step($job); break;
                     default: throw new \RuntimeException('Unknown job stage.');
                 }
-                self::save($job); $checkpoint = $job;
+                self::save($job); self::sync_status($job, $job['status'] === 'completed'); $checkpoint = $job;
                 if ($job['status'] === 'completed') {
                     try { Storage::cleanup(); }
                     catch (\Throwable $cleanupError) { Support::log($job['id'], 'warning', 'The backup was delivered, but local cleanup did not finish: ' . Support::redact($cleanupError->getMessage())); }
@@ -115,6 +115,7 @@ final class Engine
                     $job['message'] = 'The job stopped with an error. Local data has been preserved.';
                 }
                 self::save($job);
+                self::sync_status($job, true);
                 Support::log($job['id'], 'error', $job['error'], ['stage' => $job['stage'], 'attempts' => $job['attempts']]);
             } else { Support::log('', 'error', Support::redact($e->getMessage())); }
         } finally {
@@ -133,6 +134,7 @@ final class Engine
             if (!in_array($job['status'], self::ACTIVE, true)) { throw new \RuntimeException('Only an active job can be cancelled.'); }
             $path = Storage::job_dir($id) . '/cancel.request';
             if (file_put_contents($path, Support::now(), LOCK_EX) === false) { throw new \RuntimeException('Could not save the cancellation request.'); }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
             chmod($path, 0600);
             $job['cancel_requested'] = true;
             $job['message'] = 'Cancellation requested. The job will stop after the current operation finishes.';
@@ -143,6 +145,7 @@ final class Engine
             if (!in_array($job['status'], self::ACTIVE, true)) { throw new \RuntimeException('Only an active job can be cancelled.'); }
             self::apply_cancel($job);
             self::save($job);
+            self::sync_status($job, true);
             Support::log($id, 'info', 'Job cancelled by the user.');
             return $job;
         } finally { Storage::unlock($lock); }
@@ -236,6 +239,7 @@ final class Engine
             $names = self::list_directory($path);
             $stamp = hash('sha256', implode("\0", $names));
             if (isset($current['stamp']) && !hash_equals($current['stamp'], $stamp)) {
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
                 throw new \RuntimeException('Directory contents changed during scanning: ' . $relative);
             }
             $current['stamp'] = $stamp;
@@ -250,9 +254,12 @@ final class Engine
                     'mtime' => $stat['mtime'], 'ctime' => $stat['ctime'], 'inode' => $stat['ino'], 'mode' => $stat['mode'] & 0777];
                 $line = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";
                 Storage::ensure_space(strlen($line), $job['id']);
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                 $h = fopen($dir . '/file-index.ndjson', 'ab');
                 if (!$h) { throw new \RuntimeException('Could not write the file index.'); }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                 try { Archive::write_all($h, $line); fflush($h); if (function_exists('fsync')) { fsync($h); } } finally { fclose($h); }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
                 chmod($dir . '/file-index.ndjson', 0600);
                 $job['scan_state']['index_bytes'] += strlen($line);
                 $job['scan_state']['entries']++;
@@ -285,12 +292,15 @@ final class Engine
     private static function database_step_utc(array &$job): void
     {
         global $wpdb;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
         $original = $wpdb->get_var('SELECT @@session.time_zone');
         self::db_error();
         if (!is_string($original) || $original === '') { throw new \RuntimeException('Could not determine the database session time zone.'); }
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
         $wpdb->query("SET SESSION time_zone = '+00:00'"); self::db_error();
         try { self::database_step($job); }
         finally {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
             $wpdb->query($wpdb->prepare('SET SESSION time_zone = %s', $original));
             self::db_error();
         }
@@ -301,12 +311,15 @@ final class Engine
         global $wpdb;
         if (!isset($job['db_state'])) {
             $tables = self::tables();
-            $charset = isset($wpdb->dbh) && $wpdb->dbh instanceof \mysqli ? mysqli_character_set_name($wpdb->dbh) : ($wpdb->charset ?: 'utf8mb4');
+            // The server reports the encoding of returned text, including changes made by connection hooks.
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
+            $charset = $wpdb->get_var('SELECT @@session.character_set_results');
+            self::db_error();
             if (!is_string($charset) || !preg_match('/^[a-zA-Z0-9_]+$/D', $charset)) { throw new \RuntimeException('Could not determine the database connection character set.'); }
             $job['db_state'] = ['tables' => $tables, 'index' => 0, 'phase' => 'table', 'offset' => 0,
                 'bytes' => 0, 'chain' => self::ZERO_CHAIN, 'entry' => 1, 'charset' => $charset];
             self::record($job, 'file_begin', ['entry' => 1, 'path' => 'database.sql', 'size' => null, 'mode' => 0600, 'mtime' => time()]);
-            self::sql($job, "-- Telegram Backup: live database export, no transaction/snapshot guarantee.\n-- Restore into a NEW database after reviewing configuration.\nSET NAMES " . $charset . ";\nSET time_zone='+00:00';\nSET FOREIGN_KEY_CHECKS=0;\nSET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n\n");
+            self::sql($job, "-- TG Backup: live database export, no transaction/snapshot guarantee.\n-- Restore into a NEW database after reviewing configuration.\nSET NAMES " . $charset . ";\nSET time_zone='+00:00';\nSET FOREIGN_KEY_CHECKS=0;\nSET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n\n");
             return;
         }
         $db =& $job['db_state'];
@@ -319,14 +332,16 @@ final class Engine
         }
         $table = $db['tables'][$db['index']];
         $quoted = self::quote_id($table);
-        $where = self::table_where($table);
         if ($db['phase'] === 'table') {
-            $schema = $wpdb->get_row('SHOW CREATE TABLE ' . $quoted, ARRAY_N);
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump. SHOW CREATE TABLE only reads DDL; it does not modify the schema.
+            $schema = $wpdb->get_row($wpdb->prepare('SHOW CREATE TABLE %i', $table), ARRAY_N);
             self::db_error();
             if (!$schema || !isset($schema[1]) || stripos($schema[1], 'CREATE TABLE') !== 0) {
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
                 throw new \RuntimeException('Views and unknown table types are not supported: ' . $table);
             }
-            $columns = $wpdb->get_results('SHOW FULL COLUMNS FROM ' . $quoted, ARRAY_A); self::db_error();
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
+            $columns = $wpdb->get_results($wpdb->prepare('SHOW FULL COLUMNS FROM %i', $table), ARRAY_A); self::db_error();
             $db['columns'] = [];
             $db['column_info'] = [];
             foreach ($columns as $column) {
@@ -335,39 +350,34 @@ final class Engine
                     $db['column_info'][$column['Field']] = ['type' => $column['Type'], 'collation' => $column['Collation'] ?? null];
                 }
             }
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
             if (!$db['columns']) { throw new \RuntimeException('Could not identify writable columns: ' . $table); }
-            $indexes = $wpdb->get_results('SHOW INDEX FROM ' . $quoted, ARRAY_A); self::db_error();
-            $pk = [];
-            foreach ($indexes as $index) { if ($index['Key_name'] === 'PRIMARY') { $pk[(int) $index['Seq_in_index']] = $index['Column_name']; } }
-            ksort($pk); $db['order'] = $pk ? ' ORDER BY ' . implode(',', array_map([self::class, 'quote_id'], array_values($pk))) : '';
-            $db['count'] = (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $quoted . $where); self::db_error();
+            $db['order_columns'] = self::primary_columns($table);
+            $db['count'] = self::table_count($table);
             $db['schema_hash'] = hash('sha256', $schema[1]);
             self::sql($job, "\nDROP TABLE IF EXISTS " . $quoted . ";\n" . $schema[1] . ";\n");
             $db['offset'] = 0; $db['phase'] = 'rows';
         } else {
             $columnsSql = implode(',', array_map([self::class, 'quote_id'], $db['columns']));
+            // Resume older checkpoints without executing the previously serialized ORDER BY fragment.
+            if (!isset($db['order_columns'])) { $db['order_columns'] = self::primary_columns($table); }
             // Inspect only scalar byte lengths first: large BLOB/options must not exhaust PHP before a checkpoint.
-            $lengths = [];
-            foreach ($db['columns'] as $column) {
-                $expression = self::quote_id($column);
-                if ($db['column_info'][$column]['collation'] !== null || preg_match('/^json\b/i', $db['column_info'][$column]['type'])) {
-                    $expression = 'CONVERT(' . $expression . ' USING ' . $db['charset'] . ')';
-                }
-                $lengths[] = 'COALESCE(OCTET_LENGTH(' . $expression . '),0)';
-            }
-            $sizes = $wpdb->get_col('SELECT (' . implode('+', $lengths) . ') FROM ' . $quoted . $where . $db['order'] . ' LIMIT 25 OFFSET ' . (int) $db['offset']);
+            // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump. The local builder uses fixed SQL fragments and wpdb placeholders for every dynamic identifier/value.
+            $sizes = $wpdb->get_col(self::rows_query($table, $db, 25, true));
             self::db_error();
             $budget = self::database_memory_budget();
             $batchSize = 0; $batchBytes = 0;
             foreach ($sizes as $size) {
                 $rowBytes = (int) $size + 64 * count($db['columns']);
                 if ($batchBytes + $rowBytes > $budget) {
+                    // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
                     if ($batchSize === 0) { throw new \RuntimeException('A row in table ' . $table . ' is too large for the available PHP memory. Increase memory_limit or export the database using your hosting tools.'); }
                     break;
                 }
                 $batchBytes += $rowBytes; $batchSize++;
             }
-            $rows = $batchSize > 0 ? $wpdb->get_results('SELECT ' . $columnsSql . ' FROM ' . $quoted . $where . $db['order'] . ' LIMIT ' . $batchSize . ' OFFSET ' . (int) $db['offset'], ARRAY_A) : [];
+            // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump. The local builder uses fixed SQL fragments and wpdb placeholders for every dynamic identifier/value.
+            $rows = $batchSize > 0 ? $wpdb->get_results(self::rows_query($table, $db, $batchSize, false), ARRAY_A) : [];
             self::db_error();
             foreach ($rows as $row) {
                 $values = [];
@@ -378,9 +388,11 @@ final class Engine
                 $db['offset']++;
             }
             if ($batchSize === 0 || count($rows) < $batchSize || $db['offset'] >= $db['count']) {
-                $count = (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . $quoted . $where); self::db_error();
-                $schema = $wpdb->get_row('SHOW CREATE TABLE ' . $quoted, ARRAY_N); self::db_error();
+                $count = self::table_count($table);
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump. SHOW CREATE TABLE only reads DDL; it does not modify the schema.
+                $schema = $wpdb->get_row($wpdb->prepare('SHOW CREATE TABLE %i', $table), ARRAY_N); self::db_error();
                 if ($count !== $db['count'] || $db['offset'] !== $db['count'] || !$schema || !hash_equals($db['schema_hash'], hash('sha256', $schema[1]))) {
+                    // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
                     throw new \RuntimeException('The structure or row count changed while backing up table ' . $table . '. Retry the backup when the site is less active.');
                 }
                 $db['index']++; $db['phase'] = 'table';
@@ -447,14 +459,17 @@ final class Engine
             $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";
             Storage::ensure_space(strlen($json), $job['id']);
             if (file_put_contents($dir . '/manifest.json', $json, LOCK_EX) === false) { throw new \RuntimeException('Could not write the manifest.'); }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
             chmod($dir . '/manifest.json', 0600);
             Storage::ensure_space(filesize(PARCEL_DIR . 'tools/restore.php'), $job['id']);
             if (!copy(PARCEL_DIR . 'tools/restore.php', $dir . '/restore.php')) { throw new \RuntimeException('Could not save the recovery tool.'); }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
             chmod($dir . '/restore.php', 0600);
             $job['stage'] = 'send'; $job['progress'] = 70; $job['message'] = 'The archive is ready. Waiting for delivery.';
             return;
         }
         if (!isset($job['current_file'])) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
             $h = fopen($dir . '/file-index.ndjson', 'rb');
             if (!$h) { throw new \RuntimeException('The file index is missing.'); }
             try {
@@ -462,6 +477,7 @@ final class Engine
                 $line = fgets($h, 131072);
                 if ($line === false || !str_ends_with($line, "\n")) { throw new \RuntimeException('The file index is corrupted.'); }
                 $next = ftell($h);
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
             } finally { fclose($h); }
             $file = json_decode($line, true, 64, JSON_THROW_ON_ERROR);
             self::verify_source($file);
@@ -476,13 +492,16 @@ final class Engine
         }
         $file =& $job['current_file'];
         self::verify_source($file);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         $h = fopen(self::root() . '/' . $file['path'], 'rb');
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if (!$h) { throw new \RuntimeException('Could not open the source file: ' . $file['path']); }
         try {
             self::verify_stat($file, fstat($h));
             if (fseek($h, $file['offset']) !== 0) { throw new \RuntimeException('Could not resume reading the file: ' . $file['path']); }
             $remaining = $file['size'] - $file['offset'];
             if ($remaining > 0) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                 $data = fread($h, min(Archive::CHUNK, $remaining));
                 if ($data === false || $data === '') { throw new \RuntimeException('Unexpected end of file: ' . $file['path']); }
                 self::record($job, 'data', ['entry' => $file['entry'], 'offset' => $file['offset']], $data);
@@ -490,6 +509,7 @@ final class Engine
                 $file['offset'] += strlen($data);
             }
             self::verify_stat($file, fstat($h));
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         } finally { fclose($h); }
         if ($file['offset'] === $file['size']) {
             self::verify_source($file);
@@ -513,7 +533,7 @@ final class Engine
             if (!is_file($path) || filesize($path) !== $part['bytes'] || !hash_equals($part['sha256'], hash_file('sha256', $path) ?: '')) {
                 throw new \RuntimeException('A local archive part is corrupted. Delivery has stopped.');
             }
-            $message = $telegram->send_document($path, sprintf("Telegram Backup • %s\nJob %s\nPart %d/%d • SHA-256 %s",
+            $message = $telegram->send_document($path, sprintf("TG Backup • %s\nJob %s\nPart %d/%d • SHA-256 %s",
                 $job['created_at'], $job['id'], $index + 1, count($job['parts']), $part['sha256']));
             if (empty($message['message_id'])) { throw new \RuntimeException('Telegram did not confirm delivery of the file.'); }
             $job['parts'][$index]['sent'] = true;
@@ -526,25 +546,145 @@ final class Engine
             return; // At most one uploaded file per worker tick.
         }
         if (empty($job['manifest_sent'])) {
-            $message = $telegram->send_document($dir . '/manifest.json', 'Telegram Backup • Manifest for job ' . $job['id'] . '. Recovery requires ALL parts and the saved password.');
+            $message = $telegram->send_document($dir . '/manifest.json', 'TG Backup • Manifest for job ' . $job['id'] . '. Recovery requires ALL parts and the saved password.');
             if (empty($message['message_id'])) { throw new \RuntimeException('Telegram did not confirm delivery of the manifest.'); }
             $job['manifest_sent'] = true; $job['manifest_message_id'] = $message['message_id']; $job['attempts'] = 0;
-            $job['message'] = 'All files delivered. Sending the completion confirmation.';
+            $job['progress'] = 98; $job['message'] = 'Archive and manifest delivered. Sending the recovery tool.';
             return;
         }
         if (empty($job['recovery_sent'])) {
-            $message = $telegram->send_document($dir . '/restore.php', 'Telegram Backup • Standalone recovery tool. Requires PHP 8.1+, openssl and zlib. Job ' . $job['id']);
+            $message = $telegram->send_document($dir . '/restore.php', 'TG Backup • Standalone recovery tool. Requires PHP 8.1+, openssl and zlib. Job ' . $job['id']);
             if (empty($message['message_id'])) { throw new \RuntimeException('Telegram did not confirm delivery of the recovery tool.'); }
             $job['recovery_sent'] = true; $job['recovery_message_id'] = $message['message_id']; $job['attempts'] = 0;
+            $job['progress'] = 99; $job['message'] = 'All files delivered. Finalizing the backup.';
             return;
         }
-        $message = $telegram->send_message(sprintf("✅ Telegram Backup: backup complete.\nDate: %s\nJob: %s\nParts: %d • Bytes: %d\nSave all part-*.pvlt files, manifest.json, restore.php and your password. Local cleanup does not delete Telegram messages.",
-            $job['created_at'], $job['id'], count($job['parts']), $job['bytes']));
-        if (empty($message['message_id'])) { throw new \RuntimeException('Telegram did not confirm completion.'); }
-        $job['completion_message_id'] = $message['message_id'];
+        if (!empty($job['status_message_id'])) { $job['completion_message_id'] = $job['status_message_id']; }
         $job['status'] = 'completed'; $job['stage'] = 'complete'; $job['progress'] = 100;
         $job['completed_at'] = Support::now(); $job['message'] = 'The complete backup has been delivered to Telegram.'; $job['error'] = '';
         Support::log($job['id'], 'info', 'The complete backup has been delivered.');
+    }
+
+    /** Best-effort status updates are independent of archive delivery and its retry counters. */
+    private static function retry_terminal_status(array $jobs): void
+    {
+        if (!Settings::get()['consent']) { return; }
+        $fingerprint = self::fingerprint();
+        foreach ($jobs as $job) {
+            if (!in_array($job['status'], ['completed', 'failed', 'cancelled'], true) ||
+                empty($job['status_message_id']) || !empty($job['status_edit_disabled']) ||
+                ($job['status_failures'] ?? 0) >= 6 || ($job['status_retry_at'] ?? 0) > time() ||
+                !hash_equals($job['settings_fingerprint'], $fingerprint) ||
+                ($job['status_hash'] ?? '') === hash('sha256', self::status_text($job))) { continue; }
+            self::sync_status($job, true);
+            return; // At most one due terminal edit per idle worker tick, never another sendMessage.
+        }
+    }
+
+    /** Persist the initial attempt before I/O; subsequent requests only edit the acknowledged message. */
+    private static function sync_status(array &$job, bool $force = false): void
+    {
+        try {
+            if (!Settings::get()['consent'] || !hash_equals($job['settings_fingerprint'], self::fingerprint())) { return; }
+            $now = time();
+            $text = self::status_text($job);
+            $hash = hash('sha256', $text);
+            if (empty($job['status_message_id'])) {
+                if (!empty($job['status_send_attempted']) || $job['status'] !== 'running') { return; }
+                // Save before I/O: a lost Telegram reply must never trigger a second announcement.
+                $job['status_send_attempted'] = true;
+                $job['status_last_attempt'] = $now;
+                self::save($job);
+                $message = (new Telegram())->send_message($text);
+                if (empty($message['message_id']) || !ctype_digit((string) $message['message_id']) || (int) $message['message_id'] < 1) {
+                    throw new \RuntimeException('Telegram did not confirm the status message ID. The announcement will not be repeated.');
+                }
+                $job['status_message_id'] = (int) $message['message_id'];
+                $job['status_chat'] = is_array($message['chat'] ?? null)
+                    ? array_intersect_key($message['chat'], array_flip(['id', 'type', 'username'])) : [];
+            } else {
+                if (!empty($job['status_edit_disabled']) || ($job['status_retry_at'] ?? 0) > $now ||
+                    ($job['status_hash'] ?? '') === $hash || (!$force && $now - ($job['status_last_attempt'] ?? 0) < 30)) { return; }
+                $job['status_last_attempt'] = $now;
+                self::save($job);
+                (new Telegram())->edit_message((int) $job['status_message_id'], $text);
+            }
+            $job['status_hash'] = $hash;
+            $job['status_failures'] = 0; $job['status_retry_at'] = 0; $job['status_error'] = '';
+            self::save($job);
+        } catch (\Throwable $error) {
+            $job['status_failures'] = min(20, (int) ($job['status_failures'] ?? 0) + 1);
+            $job['status_error'] = Support::redact($error->getMessage());
+            $job['status_retry_at'] = time() + max(min(3600, 30 * (2 ** min(7, $job['status_failures']))),
+                $error instanceof TelegramException ? (int) $error->retry_after : 0);
+            if ($error instanceof TelegramException && !$error->retryable && in_array($error->getCode(), [400, 403, 404], true)) {
+                $job['status_edit_disabled'] = true;
+            }
+            try {
+                self::save($job);
+                Support::log($job['id'], 'warning', 'Telegram status could not be updated; backup processing continues. No replacement announcement will be sent.',
+                    ['error' => $job['status_error']]);
+            } catch (\Throwable $ignored) { /* Optional status reporting must not turn a successful delivery into a failed backup. */ }
+        }
+    }
+
+    /** Plain text only: no HTML/Markdown parse mode; bound bytes below Telegram's character limit. */
+    private static function status_text(array $job): string
+    {
+        $states = ['queued' => 'Queued', 'running' => 'In progress', 'retry' => 'Waiting to retry',
+            'completed' => 'Complete', 'failed' => 'Failed', 'cancelled' => 'Cancelled'];
+        $stages = ['scan' => 'Scanning files', 'database' => 'Exporting database', 'archive' => 'Building archive',
+            'send' => 'Uploading documents', 'complete' => 'Delivered'];
+        $parts = $job['parts'] ?? [];
+        $sent = count(array_filter($parts, static fn($part) => !empty($part['sent'])));
+        $text = 'TG Backup — ' . ($states[$job['status']] ?? 'In progress') . "\nJob: " . $job['id'] .
+            "\nCreated: " . $job['created_at'] . "\nProgress: " . max(0, min(100, (int) $job['progress'])) . '% (overall estimate)' .
+            "\nStage: " . ($stages[$job['stage']] ?? 'Preparing') .
+            "\nArchive: " . round((int) $job['bytes'] / 1048576, 1) . ' MiB' .
+            "\nParts delivered: " . $sent . '/' . count($parts);
+        if ($job['status'] === 'retry' && !empty($job['retry_at'])) { $text .= "\nRetry after: " . gmdate('Y-m-d H:i:s', $job['retry_at']) . ' UTC'; }
+        if (!empty($job['error'])) { $text .= "\nReason: " . self::status_clip(Support::redact($job['error']), 500); }
+        $prefix = self::status_link_prefix($job['status_chat'] ?? []);
+        if ($prefix !== '') {
+            $links = 0;
+            foreach ($parts as $part) {
+                if (empty($part['sent']) || empty($part['message_id']) || !ctype_digit((string) $part['message_id'])) { continue; }
+                if ($links >= 10) { break; }
+                $text .= "\n" . basename($part['name']) . ': ' . $prefix . $part['message_id']; $links++;
+            }
+            if ($sent > $links) { $text .= "\n" . ($sent - $links) . ' additional parts are in this chat; search for the Job ID above.'; }
+            foreach (['manifest' => 'manifest.json', 'recovery' => 'restore.php'] as $key => $name) {
+                if (!empty($job[$key . '_message_id']) && ctype_digit((string) $job[$key . '_message_id'])) {
+                    $text .= "\n" . $name . ': ' . $prefix . $job[$key . '_message_id'];
+                }
+            }
+        } elseif ($sent > 0) {
+            $text .= "\nFiles are the document messages in this chat. Search for the Job ID above; direct file links are unavailable here.";
+        }
+        if ($job['status'] === 'completed') {
+            $text .= "\nSave ALL parts, manifest.json, restore.php and your password. Test recovery separately. Local cleanup does not delete Telegram files.";
+        } elseif ($job['status'] === 'failed' || $job['status'] === 'cancelled') {
+            $text .= "\nThis backup is unfinished. Delivered parts remain in the chat.";
+        }
+        return self::status_clip($text, 3800);
+    }
+
+    private static function status_link_prefix(array $chat): string
+    {
+        if (!in_array($chat['type'] ?? '', ['channel', 'supergroup'], true)) { return ''; }
+        if (is_string($chat['username'] ?? null) && preg_match('/^[A-Za-z][A-Za-z0-9_]{4,63}$/D', $chat['username'])) {
+            return 'https://t.me/' . $chat['username'] . '/';
+        }
+        if (preg_match('/^-100([0-9]+)$/D', (string) ($chat['id'] ?? ''), $match)) { return 'https://t.me/c/' . $match[1] . '/'; }
+        return '';
+    }
+
+    private static function status_clip(string $text, int $bytes): string
+    {
+        if (strlen($text) <= $bytes) { return $text; }
+        $text = substr($text, 0, $bytes - 3);
+        while ($text !== '' && !preg_match('//u', $text)) { $text = substr($text, 0, -1); }
+        return $text . '...';
     }
 
     private static function record(array &$job, string $type, array $meta = [], string $data = ''): void
@@ -567,6 +707,7 @@ final class Engine
         if (is_multisite()) { throw new \RuntimeException('WordPress Multisite is not supported yet.'); }
         if (PHP_INT_SIZE < 8) { throw new \RuntimeException('Large files require 64-bit PHP.'); }
         foreach (['openssl_encrypt', 'gzdeflate', 'curl_init'] as $fn) {
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
             if (!function_exists($fn)) { throw new \RuntimeException('A required PHP function is unavailable on the server: ' . $fn); }
         }
         if (!$s['consent']) { throw new \RuntimeException('Confirm that encrypted backups may be sent to Telegram.'); }
@@ -587,6 +728,7 @@ final class Engine
     private static function tables(): array
     {
         global $wpdb;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
         $tables = $wpdb->get_col($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($wpdb->prefix) . '%'));
         self::db_error();
         if (!$tables) { throw new \RuntimeException('No WordPress tables were found with the expected prefix.'); }
@@ -599,8 +741,10 @@ final class Engine
         global $wpdb;
         $bytes = 0;
         foreach (self::tables() as $table) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
             $row = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name = %s', $table), ARRAY_A);
             self::db_error();
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
             if (!$row || !isset($row['Data_length'])) { throw new \RuntimeException('Could not estimate the database table: ' . $table); }
             // InnoDB allocated bytes are an estimate; the hard limit is also checked on every encrypted write.
             $bytes += max(65536, (int) $row['Data_length']);
@@ -615,11 +759,67 @@ final class Engine
         return " WHERE option_name NOT LIKE 'parcel\\_%' AND option_name NOT LIKE '\\_transient\\_parcel\\_%' AND option_name NOT LIKE '\\_site\\_transient\\_parcel\\_%'";
     }
 
+    private static function primary_columns(string $table): array
+    {
+        global $wpdb;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump.
+        $indexes = $wpdb->get_results($wpdb->prepare('SHOW INDEX FROM %i', $table), ARRAY_A);
+        self::db_error();
+        $columns = [];
+        foreach ($indexes as $index) {
+            if ($index['Key_name'] === 'PRIMARY') { $columns[(int) $index['Seq_in_index']] = $index['Column_name']; }
+        }
+        ksort($columns);
+        return array_values($columns);
+    }
+
+    private static function table_count(string $table): int
+    {
+        global $wpdb;
+        // table_where returns only the fixed plugin-option exclusion clause, never caller SQL.
+        // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Backup export needs live schema/session/row data; caching would produce an inconsistent dump. The local builder uses fixed SQL fragments and wpdb placeholders for every dynamic identifier/value.
+        $count = (int) $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM %i' . self::table_where($table), $table));
+        self::db_error();
+        return $count;
+    }
+
+    /** Build a bounded live read: every identifier/value is passed through a wpdb placeholder. */
+    private static function rows_query(string $table, array $db, int $limit, bool $lengths): string
+    {
+        global $wpdb;
+        if ($limit < 1 || $limit > 25 || (int) $db['offset'] < 0 || !$db['columns'] ||
+            !is_string($db['charset']) || !preg_match('/^[a-zA-Z0-9_]+$/D', $db['charset'])) {
+            throw new \RuntimeException('Invalid database export checkpoint.');
+        }
+        $expressions = []; $args = [];
+        foreach ($db['columns'] as $column) {
+            $expression = '%i'; $args[] = $column;
+            if ($lengths) {
+                if ($db['column_info'][$column]['collation'] !== null || preg_match('/^json\b/i', $db['column_info'][$column]['type'])) {
+                    $expression = 'CONVERT(%i USING %i)'; $args[] = $db['charset'];
+                }
+                $expression = 'COALESCE(OCTET_LENGTH(' . $expression . '),0)';
+            }
+            $expressions[] = $expression;
+        }
+        $query = 'SELECT ' . ($lengths ? '(' . implode('+', $expressions) . ')' : implode(',', $expressions)) .
+            ' FROM %i' . self::table_where($table);
+        $args[] = $table;
+        if ($db['order_columns']) {
+            $query .= ' ORDER BY ' . implode(',', array_fill(0, count($db['order_columns']), '%i'));
+            array_push($args, ...$db['order_columns']);
+        }
+        $query .= ' LIMIT %d OFFSET %d'; $args[] = $limit; $args[] = (int) $db['offset'];
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Only fixed SQL templates above are concatenated; identifiers use %i and integers use %d.
+        return $wpdb->prepare($query, $args);
+    }
+
     public static function quote_id(string $name): string { return '`' . str_replace('`', '``', $name) . '`'; }
 
     private static function db_error(): void
     {
         global $wpdb;
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($wpdb->last_error !== '') { throw new \RuntimeException('Database read error: ' . Support::redact($wpdb->last_error)); }
     }
 
@@ -653,8 +853,10 @@ final class Engine
 
     private static function list_directory(string $path): array
     {
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if (!is_readable($path)) { throw new \RuntimeException('The directory is not readable: ' . $path); }
         $names = scandir($path, SCANDIR_SORT_ASCENDING);
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($names === false) { throw new \RuntimeException('Could not read the directory: ' . $path); }
         return array_values(array_diff($names, ['.', '..']));
     }
@@ -663,10 +865,14 @@ final class Engine
     {
         clearstatcache(true, $path);
         $stat = lstat($path);
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if (!$stat) { throw new \RuntimeException('The source path is missing or unavailable: ' . $path); }
         $kind = $stat['mode'] & 0170000;
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($kind === 0120000) { throw new \RuntimeException('Symbolic links are not backed up. Add this path to the exclusions: ' . $path); }
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($kind !== 0100000 && $kind !== 0040000) { throw new \RuntimeException('Unsupported source file type: ' . $path); }
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if (!is_readable($path)) { throw new \RuntimeException('The source file is not readable: ' . $path); }
         return $stat;
     }
@@ -679,6 +885,7 @@ final class Engine
         }
         foreach (explode('/', $path) as $segment) {
             if (preg_match('/[. ]$/', $segment) || preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $segment)) {
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
                 throw new \RuntimeException('Nonportable filename: ' . $path . '. Rename the file or add it to the exclusions.');
             }
         }
@@ -694,6 +901,7 @@ final class Engine
         if ($real === false || !str_starts_with($real, self::root() . '/')) { throw new \RuntimeException('The source path resolves outside the site root.'); }
         $stat = self::safe_stat($path);
         if (!$file['directory']) { self::verify_stat($file, $stat); }
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         elseif (($stat['mode'] & 0170000) !== 0040000) { throw new \RuntimeException('The directory changed its file type: ' . $file['path']); }
     }
 
@@ -701,6 +909,7 @@ final class Engine
     {
         if (!$stat || ($stat['mode'] & 0170000) !== 0100000 || $stat['size'] !== $file['size'] ||
             $stat['mtime'] !== $file['mtime'] || $stat['ctime'] !== $file['ctime'] || $stat['ino'] !== $file['inode']) {
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
             throw new \RuntimeException('The file changed during backup: ' . $file['path'] . '. Create a new job.');
         }
     }
@@ -715,9 +924,11 @@ final class Engine
         }
         clearstatcache(true, $path);
         if (filesize($path) < $expected) { throw new \RuntimeException('The file index is truncated.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         $h = fopen($path, 'c+b');
         if (!$h) { throw new \RuntimeException('Could not open the file index.'); }
         try { if (!ftruncate($h, $expected)) { throw new \RuntimeException('Could not restore the file index.'); } }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         finally { fclose($h); }
     }
 
@@ -727,6 +938,7 @@ final class Engine
         $job['status'] = 'cancelled'; $job['cancel_requested'] = false;
         $job['message'] = 'Job cancelled. Delivered parts remain in Telegram.';
         $marker = Storage::job_dir($job['id']) . '/cancel.request';
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only validated engine-owned local files/directories; deletion failure must remain detectable.
         if (is_file($marker)) { @unlink($marker); }
     }
     private static function validate_type(string $type): void

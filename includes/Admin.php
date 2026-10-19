@@ -19,8 +19,8 @@ final class Admin
     public static function menu(): void
     {
         self::$hook = (string) add_options_page(
-            __('Telegram Backup', 'telegram-backup'),
-            __('TG Backup', 'telegram-backup'),
+            __('TG Backup', 'tg-backup'),
+            __('TG Backup', 'tg-backup'),
             'manage_options',
             'parcel-backups',
             [self::class, 'render']
@@ -46,8 +46,8 @@ final class Admin
     public static function render(): void
     {
         if (!current_user_can('manage_options')) {
-            wp_die(esc_html__('You do not have permission to manage backups.', 'telegram-backup'));
+            wp_die(esc_html__('You do not have permission to manage backups.', 'tg-backup'));
         }
-        echo '<div class="wrap parcel-wrap"><div id="parcel-app" class="parcel-app" aria-busy="true"><div class="parcel-loading" role="status">' . esc_html__('Loading Telegram Backup…', 'telegram-backup') . '</div></div><noscript><p>' . esc_html__('Enable JavaScript in your browser to manage this plugin.', 'telegram-backup') . '</p></noscript></div>';
+        echo '<div class="wrap parcel-wrap"><div id="parcel-app" class="parcel-app" aria-busy="true"><div class="parcel-loading" role="status">' . esc_html__('Loading TG Backup…', 'tg-backup') . '</div></div><noscript><p>' . esc_html__('Enable JavaScript in your browser to manage this plugin.', 'tg-backup') . '</p></noscript></div>';
     }
 }

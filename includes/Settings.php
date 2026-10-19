@@ -48,21 +48,21 @@ final class Settings {
             if (!array_key_exists($key,$input)) { continue; }
             if (is_bool($default)) { $out[$key] = filter_var($input[$key], FILTER_VALIDATE_BOOLEAN); }
             elseif (is_int($default)) {
-                if (filter_var($input[$key], FILTER_VALIDATE_INT) === false) { throw new \InvalidArgumentException('An integer is required: '.$key); }
+                if (filter_var($input[$key], FILTER_VALIDATE_INT) === false) { throw new \InvalidArgumentException('An integer is required: '.$key); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is data for JSON or CLI; the UI escapes at its output boundary.
                 $out[$key] = (int)$input[$key];
             } else {
-                if (!is_string($input[$key])) { throw new \InvalidArgumentException('Invalid value: '.$key); }
+                if (!is_string($input[$key])) { throw new \InvalidArgumentException('Invalid value: '.$key); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is data for JSON or CLI; the UI escapes at its output boundary.
                 $out[$key] = trim($input[$key]);
             }
         }
         foreach (['api_mode'=>['cloud','local'],'schedule'=>['off','hourly','daily','weekly'],'backup_type'=>['full','database','files']] as $key=>$allowed) {
-            if (!in_array($out[$key],$allowed,true)) { throw new \InvalidArgumentException('Invalid value: '.$key); }
+            if (!in_array($out[$key],$allowed,true)) { throw new \InvalidArgumentException('Invalid value: '.$key); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is data for JSON or CLI; the UI escapes at its output boundary.
         }
         if ($out['chat_id'] !== '' && !preg_match('/^(?:-?[0-9]{1,20}|@[a-zA-Z][a-zA-Z0-9_]{4,63})$/D',$out['chat_id'])) { throw new \InvalidArgumentException('Chat ID must be a numeric ID or a channel @username.'); }
         if (!preg_match('/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/D',$out['schedule_time'])) { throw new \InvalidArgumentException('Time must use the HH:MM format.'); }
         $ranges=['thread_id'=>[0,2147483647],'schedule_day'=>[0,6],'retention_count'=>[1,100],'retention_days'=>[1,3650],
             'quota_mb'=>[128,10485760],'reserve_mb'=>[64,1048576],'max_backup_mb'=>[16,10485760],'part_mb'=>[2,$out['api_mode']==='local'?1900:45]];
-        foreach ($ranges as $key=>[$min,$max]) { if ($out[$key]<$min || $out[$key]>$max) { throw new \InvalidArgumentException("$key: must be between $min and $max."); } }
+        foreach ($ranges as $key=>[$min,$max]) { if ($out[$key]<$min || $out[$key]>$max) { throw new \InvalidArgumentException("$key: must be between $min and $max."); } } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is data for JSON or CLI; the UI escapes at its output boundary.
         if ($out['max_backup_mb']>$out['quota_mb']) { throw new \InvalidArgumentException('The limit for one backup cannot exceed the total storage quota.'); }
         if ($out['api_mode']==='cloud') { $out['api_url']='https://api.telegram.org'; }
         else { $out['api_url']=self::url($out['api_url'],['https','http'], 'Bot API URL'); }
@@ -108,7 +108,7 @@ final class Settings {
     private static function url(string $value, array $schemes, string $label): string {
         $p=wp_parse_url($value);
         if (!$p || empty($p['host']) || empty($p['scheme']) || !in_array(strtolower($p['scheme']),$schemes,true) || isset($p['user']) || isset($p['pass']) || isset($p['fragment']) || preg_match('/[\s\x00-\x1f]/',$value)) {
-            throw new \InvalidArgumentException($label.': enter a complete URL without a username or password.');
+            throw new \InvalidArgumentException($label.': enter a complete URL without a username or password.'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is data for JSON or CLI; the UI escapes at its output boundary.
         }
         if ($label==='Bot API URL' && (isset($p['query']) || (!empty($p['path']) && $p['path']!=='/'))) { throw new \InvalidArgumentException('Bot API: specify only the scheme, host and port, without a path.'); }
         if ($label==='Proxy' && (isset($p['query']) || (!empty($p['path']) && $p['path']!=='/'))) { throw new \InvalidArgumentException('Proxy: specify only the scheme, host and port.'); }

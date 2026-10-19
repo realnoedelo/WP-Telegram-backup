@@ -20,7 +20,7 @@ if ($foreignChild !== null) {
 define('PARCEL_STORAGE_DIR', $root);
 if (!defined('DISABLE_WP_CRON')) { define('DISABLE_WP_CRON', true); }
 require $wpRoot . '/wp-load.php';
-if (!class_exists('ParcelBackups\Storage')) { throw new RuntimeException('Activate Telegram Backup on the disposable installation first.'); }
+if (!class_exists('ParcelBackups\Storage')) { throw new RuntimeException('Activate TG Backup on the disposable installation first.'); }
 if ($foreignChild !== null) {
     try { \ParcelBackups\Storage::root(); echo "unexpected-success\n"; exit(2); }
     catch (Throwable $error) { echo 'rejected: ' . $error->getMessage() . "\n"; exit(0); }
@@ -79,6 +79,42 @@ $lock = false;
 try {
     parcel_check(Storage::root() === realpath($root), 'all storage uses isolated fixture root');
     parcel_check((fileperms($root) & 0777) === 0700, 'storage directory is 0700');
+    $rootProperty = new ReflectionProperty(Storage::class, 'root');
+    $hadDocumentRoot = array_key_exists('DOCUMENT_ROOT', $_SERVER);
+    $originalDocumentRoot = $_SERVER['DOCUMENT_ROOT'] ?? null;
+    try {
+        foreach ([['not-a-path'], 'relative/path', "/tmp/invalid\0path"] as $invalidRoot) {
+            $_SERVER['DOCUMENT_ROOT'] = $invalidRoot; $rootProperty->setValue(null, null);
+            parcel_reject(fn()=>Storage::root(), 'document root');
+        }
+        $publicFixture = $root . "/public root é'\\path"; mkdir($publicFixture, 0700);
+        $_SERVER['DOCUMENT_ROOT'] = wp_slash($publicFixture); $rootProperty->setValue(null, null);
+        parcel_check(Storage::root() === realpath($root), 'document-root validation preserves spaces, Unicode, quotes and literal backslashes');
+        $_SERVER['DOCUMENT_ROOT'] = wp_slash($root); $rootProperty->setValue(null, null);
+        parcel_reject(fn()=>Storage::root(), 'outside');
+    } finally {
+        if ($hadDocumentRoot) { $_SERVER['DOCUMENT_ROOT'] = $originalDocumentRoot; } else { unset($_SERVER['DOCUMENT_ROOT']); }
+        $rootProperty->setValue(null, null);
+    }
+    // Real session reads exercise wpdb identifier placeholders, including an embedded backtick.
+    $sqlFixture = $wpdb->prefix . 'parcel_review_' . bin2hex(random_bytes(5));
+    $oddColumn = 'quoted`column';
+    $wpdb->query($wpdb->prepare('CREATE TEMPORARY TABLE %i (id BIGINT NOT NULL PRIMARY KEY, %i VARCHAR(30) CHARACTER SET utf8mb4, payload VARBINARY(30))', $sqlFixture, $oddColumn));
+    parcel_check($wpdb->last_error === '', 'temporary query fixture created');
+    try {
+        $payload = "\0A'\\";
+        $wpdb->query($wpdb->prepare('INSERT INTO %i (id, %i, payload) VALUES (1, %s, %s)', $sqlFixture, $oddColumn, 'é', $payload));
+        parcel_check($wpdb->last_error === '', 'text and binary query fixtures inserted');
+        $dbFixture = ['columns'=>['id',$oddColumn,'payload'], 'order_columns'=>['id'], 'offset'=>0,
+            'charset'=>$wpdb->get_var('SELECT @@session.character_set_results'),
+            'column_info'=>['id'=>['type'=>'bigint','collation'=>null],$oddColumn=>['type'=>'varchar(30)','collation'=>'utf8mb4_general_ci'],'payload'=>['type'=>'varbinary(30)','collation'=>null]]];
+        $rowsQuery = new ReflectionMethod(\ParcelBackups\Engine::class, 'rows_query');
+        $result = $wpdb->get_row($rowsQuery->invoke(null, $sqlFixture, $dbFixture, 1, false), ARRAY_A);
+        parcel_check($wpdb->last_error === '' && $result[$oddColumn] === 'é' && $result['payload'] === $payload, 'prepared live row query preserves quoted identifiers, text and binary bytes');
+        $size = $wpdb->get_var($rowsQuery->invoke(null, $sqlFixture, $dbFixture, 1, true));
+        parcel_check($wpdb->last_error === '' && (int)$size === strlen('1é'.$payload), 'prepared size probe uses the actual results charset');
+        parcel_check((new ReflectionMethod(\ParcelBackups\Engine::class, 'table_count'))->invoke(null, $sqlFixture) === 1, 'prepared table count reads the live table');
+    } finally { $wpdb->query($wpdb->prepare('DROP TEMPORARY TABLE IF EXISTS %i', $sqlFixture)); }
     $recent = parcel_fixture('completed', 300);
     $second = parcel_fixture('completed', DAY_IN_SECONDS);
     $third = parcel_fixture('completed', 2 * DAY_IN_SECONDS);

@@ -2,6 +2,7 @@
 /** Isolated transport regression checks: no WordPress install or live bot token needed. */
 namespace {
     if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+    if (in_array('--http', $argv, true)) { require __DIR__ . '/wordpress-http-bootstrap.php'; }
 }
 namespace ParcelBackups {
     final class Settings {
@@ -35,12 +36,22 @@ namespace {
 
     $mock = static fn() => ['ok' => true, 'result' => ['id' => 123456, 'is_bot' => true, 'username' => 'parcel_test_bot']];
     $calls = [];
-    function apply_filters(string $filter, $value, ...$args) {
+    $transportFilter = static function ($value, ...$args) {
         global $mock, $calls;
-        if ($filter !== 'parcel_telegram_transport') { throw new \RuntimeException('Unexpected filter'); }
         $calls[] = $args;
         return $mock(...$args);
+    };
+    if (function_exists('add_filter')) {
+        add_filter('parcel_telegram_transport', $transportFilter, 10, 5);
+    } else {
+        function apply_filters(string $filter, $value, ...$args) {
+            global $transportFilter;
+            if ($filter !== 'parcel_telegram_transport') { throw new \RuntimeException('Unexpected filter'); }
+            return $transportFilter($value, ...$args);
+        }
+        function wp_parse_url($url, $component = -1) { return parse_url($url, $component); }
     }
+    if (!function_exists('wp_delete_file')) { function wp_delete_file($path) { unlink($path); } }
     require dirname(__DIR__) . '/includes/TelegramException.php';
     require dirname(__DIR__) . '/includes/Telegram.php';
 
@@ -112,6 +123,19 @@ namespace {
     check(count($chats) === 2 && $chats[0]['thread_id'] === 17, 'chat and topic discovery deduplicates');
     check($calls[1][1] === ['offset' => 0, 'limit' => 100, 'timeout' => 0], 'discovery does not consume updates or change allowed_updates');
 
+    $calls = [];
+    $mock = static fn() => ['ok' => true, 'result' => ['message_id' => 730, 'chat' => ['id' => -1001234567890, 'type' => 'supergroup']]];
+    check($bot->send_message('Starting backup')['chat']['type'] === 'supergroup', 'initial status preserves confirmed chat metadata');
+    check($calls[0][0] === 'sendMessage' && !isset($calls[0][1]['disable_notification']), 'initial status is the one normal notification');
+    $calls = [];
+    check($bot->edit_message(730, 'Progress: 50%')['message_id'] === 730, 'persistent status edit receipt');
+    check($calls[0][0] === 'editMessageText' && $calls[0][1]['message_id'] === 730 && !isset($calls[0][1]['message_thread_id']), 'status edits address the existing message without a topic parameter');
+    $mock = static fn() => ['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: message is not modified'];
+    check(!empty($bot->edit_message(730, 'Progress: 50%')['unchanged']), 'unchanged status is a successful no-op');
+    rejected(fn() => $bot->edit_message(0, 'Invalid'), 'valid message ID', false);
+    $mock = static fn() => ['ok' => false, 'error_code' => 403, 'description' => 'Forbidden'];
+    rejected(fn() => $bot->edit_message(730, 'Progress'), 'blocked', false);
+
     $path = Storage::root() . '/backup.pvlt';
     file_put_contents($path, 'encrypted test fixture');
     $calls = [];
@@ -119,6 +143,7 @@ namespace {
     check($bot->send_document($path, 'Test')['message_id'] === 731, 'document receipt');
     check($calls[0][1]['chat_id'] === '-1001234567890' && $calls[0][1]['message_thread_id'] === 17, 'document destination and forum topic');
     check($calls[0][2] === $path && !isset($calls[0][3]['token'], $calls[0][3]['proxy_password']), 'transport hook passes path without decrypted secrets');
+    check($calls[0][1]['disable_notification'] === 'true', 'every document including helpers is silent');
     $handle = fopen($path, 'r+');
     ftruncate($handle, 45 * 1048576 + 1); fclose($handle);
     rejected(fn() => $bot->send_document($path), 'limit', false);
@@ -160,6 +185,7 @@ namespace {
 <?php
 header('Content-Type: application/json');
 $route = $_SERVER['REQUEST_URI'];
+file_put_contents(__DIR__ . '/requests.jsonl', json_encode(['route' => $route]) . "\n", FILE_APPEND);
 if (str_starts_with($route, 'http://127.0.0.2:9/')) {
     if (($_SERVER['HTTP_PROXY_AUTHORIZATION'] ?? '') !== 'Basic ' . base64_encode('parcel-test:private-proxy-value')) {
         http_response_code(407); echo json_encode(['ok' => false, 'error_code' => 407, 'description' => 'Proxy credentials rejected']); exit;
@@ -179,18 +205,27 @@ if (str_starts_with($route, '/rate/')) {
 if (str_starts_with($route, '/unavailable/')) {
     http_response_code(503); echo '<html>Temporary maintenance</html>'; exit;
 }
+if (str_starts_with($route, '/gzip/')) {
+    header('Content-Encoding: gzip'); echo gzencode(json_encode(['ok' => true, 'result' => ['id' => 123456, 'is_bot' => true]])); exit;
+}
+if (str_starts_with($route, '/bomb/')) {
+    header('Content-Encoding: gzip'); echo gzencode(str_repeat('x', 2097153)); exit;
+}
+if (str_starts_with($route, '/bad-encoding/')) {
+    header('Content-Encoding: gzip'); echo 'not a gzip stream'; exit;
+}
 if (str_starts_with($route, '/overflow/')) {
     echo str_repeat('x', 2097153); exit;
 }
 $method = basename(parse_url($route, PHP_URL_PATH));
 if ($method === 'sendDocument') {
     $upload = $_FILES['document'] ?? [];
-    if (($upload['error'] ?? -1) !== UPLOAD_ERR_OK || ($_POST['chat_id'] ?? '') !== '-1001234567890' || ($_POST['message_thread_id'] ?? '') !== '17') {
+    if (($upload['error'] ?? -1) !== UPLOAD_ERR_OK || ($_POST['chat_id'] ?? '') !== '-1001234567890' || ($_POST['message_thread_id'] ?? '') !== '17' || ($_POST['disable_notification'] ?? '') !== 'true') {
         http_response_code(400); echo json_encode(['ok' => false, 'error_code' => 400, 'description' => 'Malformed multipart or recipient']); exit;
     }
     echo json_encode(['ok' => true, 'result' => ['message_id' => 817, 'document' => ['file_name' => $upload['name'], 'file_size' => $upload['size'], 'fixture_sha256' => hash_file('sha256', $upload['tmp_name'])]]]); exit;
 }
-echo json_encode(['ok' => true, 'result' => ['id' => 123456, 'is_bot' => true, 'username' => 'parcel_test_bot']]);
+echo json_encode(['ok' => true, 'result' => ['id' => 123456, 'is_bot' => true, 'username' => 'parcel_test_bot', 'internal_marker' => isset($_SERVER['HTTP_X_TG_BACKUP_REQUEST']), 'test_header' => $_SERVER['HTTP_X_TEST_SCOPE'] ?? '', 'proxy_auth' => isset($_SERVER['HTTP_PROXY_AUTHORIZATION'])]]);
 PHP);
         $listener = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
         if (!$listener) { throw new \RuntimeException('Cannot choose loopback port: ' . $errstr); }
@@ -211,7 +246,52 @@ PHP);
             $mock = static fn() => null;
             $localSettings = array_replace(Settings::get(), ['api_mode' => 'local', 'api_url' => 'http://' . $address]);
             $local = new Telegram($localSettings);
-            check($local->request('getMe')['id'] === 123456, 'real cURL request reaches local Bot API');
+            check($local->request('getMe')['id'] === 123456, 'real WordPress HTTP API request reaches local Bot API');
+            check(!$local->request('getMe')['internal_marker'], 'opaque scope marker is not transmitted');
+            $assertCleanHooks = static function (): void {
+                check(!has_action('http_api_curl') && !has_action('requests-requests.before_request'), 'temporary HTTP hooks are removed');
+            };
+            $assertCleanHooks();
+            $transportCache = \WpOrg\Requests\Requests::$transport;
+            \WpOrg\Requests\Requests::$transport[serialize(['ssl' => false])] = \WpOrg\Requests\Transport\Fsockopen::class;
+            try { check($local->request('getMe')['id'] === 123456, 'request selects cURL even when global Requests transport is streams'); }
+            finally { \WpOrg\Requests\Requests::$transport = $transportCache; }
+            $assertCleanHooks();
+            $intercept = static fn() => ['response' => ['code' => 200], 'body' => '{"ok":true,"result":{"message_id":123}}'];
+            add_filter('pre_http_request', $intercept);
+            try { rejected(fn() => $local->request('getMe'), 'intercepted', false); }
+            finally { remove_filter('pre_http_request', $intercept); }
+            $assertCleanHooks();
+            $intercept = static fn() => new \WP_Error('http_request_failed', 'cURL error 28: sensitive ' . Settings::secret('token'));
+            add_filter('pre_http_request', $intercept);
+            try {
+                $error = rejected(fn() => $local->request('getMe'), 'timed out', true);
+                check(!str_contains($error->getMessage(), Settings::secret('token')), 'WP HTTP errors cannot leak the token');
+            } finally { remove_filter('pre_http_request', $intercept); }
+            $assertCleanHooks();
+            $intercept = static function () { throw new \RuntimeException('Unexpected https://example.test/bot' . Settings::secret('token')); };
+            add_filter('pre_http_request', $intercept);
+            try {
+                $error = rejected(fn() => $local->request('getMe'), 'WordPress HTTP API', false);
+                check(!str_contains($error->getMessage(), Settings::secret('token')) && !str_contains($error->getMessage(), 'https://'), 'unexpected hook exceptions are redacted');
+            } finally { remove_filter('pre_http_request', $intercept); }
+            $assertCleanHooks();
+            $nested = null;
+            $nestedFilter = static function ($pre, $args) use ($address, &$nested) {
+                if (!empty($args['_tg_backup_request'])) {
+                    $nested = wp_remote_post('http://' . $address . '/nested/getMe', ['headers' => ['X-Test-Scope' => 'untouched']]);
+                }
+                return $pre;
+            };
+            add_filter('pre_http_request', $nestedFilter, 10, 2);
+            try { $local->request('getMe'); }
+            finally { remove_filter('pre_http_request', $nestedFilter, 10); }
+            check(!is_wp_error($nested) && json_decode(wp_remote_retrieve_body($nested), true)['result']['test_header'] === 'untouched', 'nested unrelated WordPress request retains its own headers');
+            $assertCleanHooks();
+            $ordinary = wp_remote_post('http://' . $address . '/ordinary/getMe', ['headers' => ['X-Test-Scope' => 'after']]);
+            $ordinaryResult = json_decode(wp_remote_retrieve_body($ordinary), true)['result'];
+            check($ordinaryResult['test_header'] === 'after' && !$ordinaryResult['proxy_auth'], 'ordinary request after plugin call has no leaked proxy credentials');
+
             $upload = Storage::root() . '/multipart-fixture.pvlt';
             $stream = fopen($upload, 'wb');
             $chunk = random_bytes(1048576);
@@ -263,10 +343,21 @@ PHP);
             check($error->retry_after === 121, 'real HTTP Retry-After header respected');
             rejected(fn() => (new Telegram(array_replace($localSettings, ['api_url' => 'http://' . $address . '/unavailable'])))->request('getMe'), '503', true);
             rejected(fn() => (new Telegram(array_replace($localSettings, ['api_url' => 'http://' . $address . '/overflow'])))->request('getMe'), 'too large', false);
+            $assertCleanHooks();
+            check((new Telegram(array_replace($localSettings, ['api_url' => 'http://' . $address . '/gzip'])))->request('getMe')['id'] === 123456, 'compressed JSON is decoded with a size bound');
+            rejected(fn() => (new Telegram(array_replace($localSettings, ['api_url' => 'http://' . $address . '/bomb'])))->request('getMe'), 'too large', false);
+            $assertCleanHooks();
+            rejected(fn() => (new Telegram(array_replace($localSettings, ['api_url' => 'http://' . $address . '/bad-encoding'])))->request('getMe'), 'encoded', false);
+            $assertCleanHooks();
+            $requestLog = array_map(static fn($line) => json_decode($line, true), file(Storage::root() . '/requests.jsonl', FILE_IGNORE_NEW_LINES));
+            foreach (['overflow', 'bomb', 'bad-encoding'] as $prefix) {
+                check(count(array_filter($requestLog, static fn($entry) => str_starts_with($entry['route'], '/' . $prefix . '/'))) === 1, $prefix . ' rejection never repeats the HTTP request');
+            }
+
             unlink($upload);
         } finally {
             proc_terminate($process); proc_close($process);
-            foreach (['router.php', 'http.log', 'redirect-followed', 'multipart-fixture.pvlt'] as $name) {
+            foreach (['router.php', 'http.log', 'redirect-followed', 'multipart-fixture.pvlt', 'requests.jsonl'] as $name) {
                 if (file_exists(Storage::root() . '/' . $name)) { unlink(Storage::root() . '/' . $name); }
             }
         }

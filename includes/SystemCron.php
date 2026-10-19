@@ -50,6 +50,7 @@ final class SystemCron
     {
         self::invalidate();
         $env = self::environment(); self::check_user($env);
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($env['php_error'] !== '') { throw new \RuntimeException($env['php_error']); }
         $root = self::persistent_root();
         $command = self::command($env);
@@ -72,6 +73,7 @@ final class SystemCron
             update_option(self::OPTION, ['uid' => $env['uid'], 'user' => $env['user'], 'site' => self::site_id(),
                 'command' => $command, 'installed_at' => Support::now()], false);
             Support::log('', 'info', 'System cron installed for user ' . $env['user'] . '.');
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         } finally { flock($lock, LOCK_UN); fclose($lock); self::invalidate(); }
         return self::status(true);
     }
@@ -82,6 +84,7 @@ final class SystemCron
         $env = self::environment(); self::check_user($env);
         $saved = get_option(self::OPTION, []);
         if (is_array($saved) && isset($saved['uid']) && (int) $saved['uid'] !== $env['uid']) {
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
             throw new \RuntimeException('The schedule was installed by a different OS user. Remove it as ' . ($saved['user'] ?? 'the owner') . '; the other crontab has not been changed.');
         }
         $lock = self::edit_lock($env);
@@ -98,6 +101,7 @@ final class SystemCron
             }
             delete_option(self::OPTION);
             Support::log('', 'info', 'The managed system cron block has been removed.');
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         } finally { flock($lock, LOCK_UN); fclose($lock); self::invalidate(); }
         return self::status(true);
     }
@@ -126,6 +130,7 @@ final class SystemCron
             if (is_array($account) && !empty($account['dir'])) { $lockCandidates[] = $account['dir']; }
             if (PHP_OS_FAMILY !== 'Linux') { $lockCandidates[] = '/tmp'; }
             foreach ($lockCandidates as $directory) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- Check actual local OS permissions for streaming and flock; FTP filesystem permissions are unrelated.
                 if (is_dir($directory) && is_writable($directory)) { $env['lock_dir'] = realpath($directory) ?: $directory; break; }
             }
             if ($env['lock_dir'] === '') { $env['error'] = 'No shared writable cron lock directory is available (/run/lock, /var/lock or the user home directory). Automatic crontab changes are unavailable.'; }
@@ -156,6 +161,7 @@ final class SystemCron
     {
         // Recheck the uid, including cached environments: root is never permitted.
         if ($env['uid'] === 0) { throw new \RuntimeException('Reading or changing the managed crontab as root is not allowed. Use the PHP site user.'); }
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($env['error'] !== '') { throw new \RuntimeException($env['error']); }
         if ($env['uid'] < 0 || $env['crontab'] === '') { throw new \RuntimeException('System cron is unavailable to the current user.'); }
     }
@@ -193,6 +199,7 @@ final class SystemCron
         $data = json_decode(trim($probe['stdout']), true);
         if ($probe['code'] !== 0 || !is_array($data) || empty($data['ok'])) {
             $detail = trim($probe['stderr']);
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
             throw new \RuntimeException('The WordPress startup check through PHP CLI failed.' . ($detail !== '' ? ' ' . Support::redact($detail) : ' Check the CLI PHP configuration and plugin loading.'));
         }
         if (($data['site'] ?? '') !== self::site_id() || ($data['storage'] ?? '') !== $root ||
@@ -209,6 +216,7 @@ final class SystemCron
             return $result['stdout'];
         }
         if ($result['code'] === 1 && preg_match('/\bno crontab for\b/i', $result['stderr']) && trim($result['stdout']) === '') { return ''; }
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         throw new \RuntimeException('The OS user cannot read its crontab: ' . Support::redact(trim($result['stderr']) ?: 'access denied by the hosting provider.'));
     }
 
@@ -217,6 +225,7 @@ final class SystemCron
         $text = self::without_generated_headers($text);
         if (strlen($text) > self::MAX_CRONTAB || str_contains($text, "\0")) { throw new \RuntimeException('Invalid crontab content.'); }
         $result = self::process([$env['crontab'], '-'], $text);
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if ($result['code'] !== 0) { throw new \RuntimeException('The hosting provider did not allow writing crontab: ' . Support::redact(trim($result['stderr']) ?: 'the command failed.')); }
     }
 
@@ -279,17 +288,21 @@ final class SystemCron
     private static function edit_lock(array $env)
     {
         if (empty($env['lock_dir'])) { throw new \RuntimeException('The shared directory for the user crontab lock is unavailable.'); }
-        $path = $env['lock_dir'] . '/.telegram-backup-crontab-' . $env['uid'] . '.lock';
+        $path = $env['lock_dir'] . '/.tg-backup-crontab-' . $env['uid'] . '.lock';
         if (is_link($path)) { throw new \RuntimeException('An unsafe symbolic link was found in place of the cron lock.'); }
         if (file_exists($path) && fileowner($path) !== $env['uid']) { throw new \RuntimeException('The shared cron lock file belongs to another user.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         $handle = fopen($path, 'c+');
         if (!$handle) { throw new \RuntimeException('Could not open the cron configuration lock.'); }
         $stat = fstat($handle); $disk = lstat($path);
         if (!$stat || !$disk || $stat['uid'] !== $env['uid'] || ($stat['mode'] & 0170000) !== 0100000 ||
             $stat['ino'] !== $disk['ino'] || $stat['dev'] !== $disk['dev']) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
             fclose($handle); throw new \RuntimeException('The shared cron lock has an unsafe owner or file type.');
         }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
         chmod($path, 0600);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         if (!flock($handle, LOCK_EX | LOCK_NB)) { fclose($handle); throw new \RuntimeException('Cron setup is already running. Try again in a few seconds.'); }
         return $handle;
     }
@@ -305,6 +318,7 @@ final class SystemCron
     {
         if (!function_exists('proc_open')) { throw new \RuntimeException('proc_open is unavailable on this hosting account.'); }
         $pipes = [];
+        // phpcs:ignore Generic.PHP.ForbiddenFunctions.Found -- System cron requires fixed-argv proc_open: no shell, non-root user, bounded time/output; documented for manual directory review.
         $process = @proc_open($argv, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes,
             null, ['PATH' => '/usr/bin:/bin', 'LANG' => 'C', 'LC_ALL' => 'C'], ['bypass_shell' => true]);
         if (!is_resource($process)) { throw new \RuntimeException('Could not start the system command.'); }
@@ -314,10 +328,12 @@ final class SystemCron
             while (true) {
                 if (isset($pipes[0])) {
                     if ($offset < strlen($input)) {
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                         $written = @fwrite($pipes[0], substr($input, $offset, 8192));
                         if ($written === false) { throw new \RuntimeException('The command refused to accept the crontab data.'); }
                         $offset += $written;
                     }
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                     if ($offset >= strlen($input)) { fclose($pipes[0]); unset($pipes[0]); }
                 }
                 $chunk = stream_get_contents($pipes[1]); if ($chunk !== false) { $out .= $chunk; }
@@ -333,6 +349,7 @@ final class SystemCron
         } finally {
             $state = proc_get_status($process);
             if ($state['running']) { proc_terminate($process, 15); usleep(50000); $state = proc_get_status($process); if ($state['running']) { proc_terminate($process, 9); } }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
             foreach ($pipes as $pipe) { if (is_resource($pipe)) { fclose($pipe); } }
             $closed = proc_close($process);
             if ($code === null || $code < 0) { $code = $closed; }

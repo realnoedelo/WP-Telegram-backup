@@ -11,11 +11,18 @@ final class Storage {
     public static function root(): string {
         if (self::$root !== null) { return self::$root; }
         $dir = defined('TELEGRAM_BACKUP_STORAGE_DIR') ? (string)TELEGRAM_BACKUP_STORAGE_DIR : (defined('PARCEL_STORAGE_DIR') ? (string)PARCEL_STORAGE_DIR : rtrim(get_temp_dir(),'/\\') . '/parcel-backups-' . substr(self::identity(),0,20));
-        if ($dir==='' || !path_is_absolute($dir) || is_link($dir)) { throw new \RuntimeException('Storage must be an absolute path to a dedicated directory, not a symbolic link.'); }
+        if ($dir==='' || preg_match('/[\x00-\x1f\x7f]/', $dir) || !path_is_absolute($dir) || is_link($dir)) { throw new \RuntimeException('Storage must be an absolute path to a dedicated directory, not a symbolic link.'); }
         if (!is_dir($dir) && !wp_mkdir_p($dir)) { throw new \RuntimeException('Could not create private storage. Set TELEGRAM_BACKUP_STORAGE_DIR outside the public site directory.'); }
         $real=realpath($dir);
         if ($real===false) { throw new \RuntimeException('Could not resolve the storage path.'); }
-        foreach ([ABSPATH, $_SERVER['DOCUMENT_ROOT'] ?? ''] as $public) {
+        // DOCUMENT_ROOT is an OS path, not text: validate its type/path without deleting legitimate path characters.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Validated below as a scalar, absolute, control-free directory path; text sanitization would change its identity.
+        $documentRoot = isset($_SERVER['DOCUMENT_ROOT']) ? wp_unslash($_SERVER['DOCUMENT_ROOT']) : '';
+        if (!is_string($documentRoot) || ($documentRoot !== '' &&
+            (preg_match('/[\x00-\x1f\x7f]/', $documentRoot) || !path_is_absolute($documentRoot)))) {
+            throw new \RuntimeException('The server document root must be an absolute directory path without control characters.');
+        }
+        foreach ([ABSPATH, $documentRoot] as $public) {
             if ($public==='' || !is_dir($public)) { continue; }
             $base=realpath($public);
             if ($base && ($real===$base || strpos($real,$base.DIRECTORY_SEPARATOR)===0)) {
@@ -28,11 +35,15 @@ final class Storage {
         if (!is_file($marker)) {
             $existing=array_diff(scandir($real) ?: [],['.','..']);
             if ($existing) { throw new \RuntimeException('New storage requires an empty, dedicated directory.'); }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
             @chmod($real,0700);
             if (file_put_contents($marker,$owner,LOCK_EX)===false) { throw new \RuntimeException('Could not write the storage ownership marker.'); }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
             @chmod($marker,0600);
         }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
         @chmod($real,0700);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- Check actual local OS permissions for streaming and flock; FTP filesystem permissions are unrelated.
         if (!is_writable($real) || (DIRECTORY_SEPARATOR==='/' && (fileperms($real)&0077)!==0)) { throw new \RuntimeException('Storage requires permissions 0700 and write access for PHP.'); }
         self::$root=$real;
         return $real;
@@ -42,6 +53,7 @@ final class Storage {
         if (!self::valid_id($id)) { throw new \InvalidArgumentException('Invalid job ID.'); }
         $path=self::root().'/'.$id;
         if (is_link($path)) { throw new \RuntimeException('Symbolic links are not allowed in storage.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- Create an owner-only local job directory inside the validated private storage root.
         if (!is_dir($path) && !mkdir($path,0700)) { throw new \RuntimeException('Could not create the job directory.'); }
         return $path;
     }
@@ -50,6 +62,7 @@ final class Storage {
         $path=self::root().'/'.$id.'/job.json';
         if (!is_file($path) || is_link(dirname($path)) || is_link($path)) { return null; }
         $data=json_decode((string)file_get_contents($path),true);
+        // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is JSON/CLI data; the admin UI escapes it when rendering HTML.
         if (!is_array($data) || ($data['id']??'')!==$id) { throw new \RuntimeException('Corrupted state for job '.$id.'. The files have been preserved.'); }
         return $data;
     }
@@ -59,8 +72,11 @@ final class Storage {
         $json=wp_json_encode($job,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
         if ($json===false) { throw new \RuntimeException('Could not write the job state.'); }
         $temp=$dir.'/job.json.tmp.'.bin2hex(random_bytes(4));
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only validated engine-owned local files/directories; deletion failure must remain detectable.
         if (file_put_contents($temp,$json,LOCK_EX)!==strlen($json)) { @unlink($temp); throw new \RuntimeException('Could not save the job state: check available disk space.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
         @chmod($temp,0600);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename,WordPress.WP.AlternativeFunctions.unlink_unlink -- Same-directory rename is an atomic checkpoint commit; remote filesystem moves cannot provide this guarantee.
         if (!rename($temp,$dir.'/job.json')) { @unlink($temp); throw new \RuntimeException('Could not update the job state.'); }
     }
     public static function jobs(): array {
@@ -136,17 +152,23 @@ final class Storage {
     public static function remove_tree(string $path): void {
         $root=self::root(); $parent=realpath(dirname($path));
         if (!$parent || ($parent!==$root && strpos($parent,$root.DIRECTORY_SEPARATOR)!==0) || $path===$root || in_array(basename($path),['.','..','.parcel-owner','worker.lock'],true)) { throw new \RuntimeException('Deleting files outside the backup storage directory is not allowed.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only validated engine-owned local files/directories; deletion failure must remain detectable.
         if (is_link($path) || is_file($path)) { if (!unlink($path)) { throw new \RuntimeException('Could not delete the file.'); } return; }
         if (!is_dir($path)) { return; }
         foreach (scandir($path) ?: [] as $name) { if ($name!=='.' && $name!=='..') { self::remove_tree($path.'/'.$name); } }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- Remove only validated engine-owned local files/directories; deletion failure must remain detectable.
         if (!rmdir($path)) { throw new \RuntimeException('Could not delete the directory.'); }
     }
     public static function lock() {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         $fp=fopen(self::root().'/worker.lock','c+');
         if (!$fp) { throw new \RuntimeException('Could not open the queue lock.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
         @chmod(self::root().'/worker.lock',0600);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         if (!flock($fp,LOCK_EX|LOCK_NB)) { fclose($fp); return false; }
         return $fp;
     }
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
     public static function unlock($fp): void { if (is_resource($fp)) { flock($fp,LOCK_UN); fclose($fp); } }
 }

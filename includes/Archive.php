@@ -31,13 +31,17 @@ final class Archive
             if (!preg_match('/^part-(\d{5})\.pvlt$/D', basename($path), $m)) { continue; }
             $part = (int) $m[1];
             if ($part > (int) $state['part']) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only validated engine-owned local files/directories; deletion failure must remain detectable.
                 if (!unlink($path)) { throw new \RuntimeException('Could not delete the unfinished archive part.'); }
             } elseif ($part === (int) $state['part'] && !$state['sealed']) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                 $h = fopen($path, 'c+b');
                 if (!$h || !ftruncate($h, (int) $state['offset'])) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                     if (is_resource($h)) { fclose($h); }
                     throw new \RuntimeException('Could not restore the archive checkpoint.');
                 }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
                 fclose($h);
             }
         }
@@ -80,6 +84,7 @@ final class Archive
         if ($cipher === false || strlen($tag) !== 16) { throw new \RuntimeException('Could not encrypt the archive.'); }
         $frame = pack('N', strlen($cipher) + 28) . $nonce . $tag . $cipher;
         $path = $dir . '/' . self::part_name($state['part']);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         $h = fopen($path, 'c+b');
         if (!$h) { throw new \RuntimeException('Could not open the archive part.'); }
         try {
@@ -87,6 +92,7 @@ final class Archive
             self::write_all($h, $frame);
             if (!fflush($h)) { throw new \RuntimeException('Could not save the archive chunk.'); }
             if (function_exists('fsync') && !fsync($h)) { throw new \RuntimeException('Could not sync the archive chunk to disk.'); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         } finally { fclose($h); }
         $state['offset'] += strlen($frame);
         $state['total_bytes'] += strlen($frame);
@@ -129,10 +135,13 @@ final class Archive
         self::check_limit($state, strlen($state['header']), $backupLimit);
         Storage::ensure_space(strlen($state['header']), $state['id']);
         $path = $dir . '/' . self::part_name($state['part']);
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         $h = fopen($path, 'xb');
         if (!$h) { throw new \RuntimeException('Could not create a new archive part.'); }
         try { self::write_all($h, $state['header']); fflush($h); if (function_exists('fsync')) { fsync($h); } }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
         finally { fclose($h); }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Owner-only permissions are required for these local private-storage/lock files.
         chmod($path, 0600);
         $state['offset'] = strlen($state['header']);
         $state['total_bytes'] += $state['offset'];
@@ -162,6 +171,7 @@ final class Archive
     {
         $offset = 0; $length = strlen($bytes);
         while ($offset < $length) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Local streams provide bounded-memory reads, seek/truncate checkpoints and flock; WP_Filesystem has no equivalent handle semantics.
             $n = fwrite($handle, substr($bytes, $offset));
             if ($n === false || $n === 0) { throw new \RuntimeException('Could not write the file: check available disk space.'); }
             $offset += $n;

@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * Telegram Backup standalone recovery tool. GPL-3.0-or-later.
+ * TG Backup standalone recovery tool. GPL-3.0-or-later.
  * Requires 64-bit PHP 8.1+, openssl and zlib. No WordPress or Composer needed.
  */
 declare(strict_types=1);
@@ -48,7 +48,7 @@ final class ParcelRestore
         try {
             foreach ($parts as $index => $part) {
                 if ($this->complete) { throw new RuntimeException('Unexpected part after the authenticated completion record.'); }
-                $h = fopen($part, 'rb');
+                $h = fopen($part, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                 if (!$h) { throw new RuntimeException('Cannot read part: ' . basename($part)); }
                 try {
                     $magic = $this->readExact($h, strlen(self::MAGIC));
@@ -74,7 +74,7 @@ final class ParcelRestore
                     $headerBytes = $magic . $line;
                     $records = 0;
                     while (true) {
-                        $lengthBytes = fread($h, 4);
+                        $lengthBytes = fread($h, 4); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                         if ($lengthBytes === false) { throw new RuntimeException('Failed to read archive.'); }
                         if ($lengthBytes === '' && feof($h)) { break; }
                         if ($this->complete) { throw new RuntimeException('Unexpected data after archive completion.'); }
@@ -97,23 +97,23 @@ final class ParcelRestore
                         $sequence++; $records++;
                     }
                     if ($records === 0) { throw new RuntimeException('Archive part has no authenticated records.'); }
-                } finally { fclose($h); }
+                } finally { fclose($h); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                 $previous = hash_file('sha256', $part);
                 if ($previous === false) { throw new RuntimeException('Cannot verify part hash.'); }
             }
             if (!$this->complete || $this->current !== null || $this->handle !== null) {
                 throw new RuntimeException('Archive is incomplete: authenticated completion record is missing.');
             }
-            foreach (array_reverse($this->directoryTimes) as $directory) { @touch($directory['path'], $directory['mtime']); }
+            foreach (array_reverse($this->directoryTimes) as $directory) { @touch($directory['path'], $directory['mtime']); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             $report = ['verified' => true, 'format' => 'parcel-vault', 'version' => 1, 'id' => $id,
                 'files' => $this->files, 'directories' => $this->directories, 'bytes' => $this->bytes,
                 'parts' => count($parts), 'verified_at' => gmdate('c'), 'backup' => $this->start,
                 'notice' => 'Cryptographic completeness verified. Inspect the files and test the database in an isolated environment before deployment.'];
             $this->writeFile($this->output . '/PARCEL-VERIFIED.json', json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
-            if (!unlink($marker)) { throw new RuntimeException('Recovery succeeded but could not remove the incomplete marker.'); }
+            if (!unlink($marker)) { throw new RuntimeException('Recovery succeeded but could not remove the incomplete marker.'); } // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             return $report;
         } finally {
-            if (is_resource($this->handle)) { fclose($this->handle); $this->handle = null; }
+            if (is_resource($this->handle)) { fclose($this->handle); $this->handle = null; } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             if (function_exists('sodium_memzero') && is_string($key)) { sodium_memzero($key); }
         }
     }
@@ -147,9 +147,9 @@ final class ParcelRestore
                 if ($size !== null && (!is_int($size) || $size < 0)) { throw new RuntimeException('Invalid file size.'); }
                 $this->seen[$path] = true;
                 $this->makeParents($path);
-                $this->handle = fopen($path, 'xb');
+                $this->handle = fopen($path, 'xb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                 if (!$this->handle) { throw new RuntimeException('Cannot create output file.'); }
-                chmod($path, 0600);
+                chmod($path, 0600); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                 $this->current = ['entry' => $entry, 'path' => $path, 'size' => $size, 'bytes' => 0,
                     'chain' => self::ZERO_CHAIN, 'mtime' => $this->integer($m, 'mtime')];
                 break;
@@ -175,9 +175,9 @@ final class ParcelRestore
                 }
                 if (!fflush($this->handle)) { throw new RuntimeException('Cannot flush restored file.'); }
                 if (function_exists('fsync') && !fsync($this->handle)) { throw new RuntimeException('Cannot sync restored file.'); }
-                fclose($this->handle); $this->handle = null;
+                fclose($this->handle); $this->handle = null; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                 // Intentionally safe permissions; original mode is informational and never grants execution.
-                @touch($this->current['path'], $this->current['mtime']);
+                @touch($this->current['path'], $this->current['mtime']); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
                 $this->bytes += $this->current['bytes']; $this->files++; $this->current = null;
                 break;
             case 'complete':
@@ -219,7 +219,7 @@ final class ParcelRestore
             $cursor .= '/' . $segment;
             if (is_link($cursor)) { throw new RuntimeException('Symlinks are not allowed in output paths.'); }
             if (!file_exists($cursor)) {
-                if (!mkdir($cursor, 0700)) { throw new RuntimeException('Cannot create output directory.'); }
+                if (!mkdir($cursor, 0700)) { throw new RuntimeException('Cannot create output directory.'); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             } elseif (!is_dir($cursor)) { throw new RuntimeException('Output parent is not a directory.'); }
         }
     }
@@ -238,14 +238,14 @@ final class ParcelRestore
             if (!is_dir($path)) { throw new RuntimeException('Output exists and is not a directory.'); }
             $entries = scandir($path);
             if ($entries === false || count($entries) !== 2) { throw new RuntimeException('Output directory must be empty; nothing will be overwritten.'); }
-        } elseif (!mkdir($path, 0700)) { throw new RuntimeException('Cannot create output directory.'); }
-        chmod($path, 0700);
+        } elseif (!mkdir($path, 0700)) { throw new RuntimeException('Cannot create output directory.'); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
+        chmod($path, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
         return realpath($path) ?: throw new RuntimeException('Cannot resolve output directory.');
     }
 
     private function integer(array $m, string $key): int
     {
-        if (!isset($m[$key]) || !is_int($m[$key]) || $m[$key] < 0) { throw new RuntimeException('Invalid integer in ' . $key); }
+        if (!isset($m[$key]) || !is_int($m[$key]) || $m[$key] < 0) { throw new RuntimeException('Invalid integer in ' . $key); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is data for JSON or CLI; the UI escapes at its output boundary.
         return $m[$key];
     }
 
@@ -253,7 +253,7 @@ final class ParcelRestore
     {
         $data = '';
         while (strlen($data) < $length) {
-            $chunk = fread($h, $length - strlen($data));
+            $chunk = fread($h, $length - strlen($data)); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             if ($chunk === false || $chunk === '') { throw new RuntimeException('Truncated archive.'); }
             $data .= $chunk;
         }
@@ -263,7 +263,7 @@ final class ParcelRestore
     private function writeAll($h, string $data): void
     {
         for ($offset = 0, $length = strlen($data); $offset < $length;) {
-            $n = fwrite($h, substr($data, $offset));
+            $n = fwrite($h, substr($data, $offset)); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             if ($n === false || $n === 0) { throw new RuntimeException('Cannot write restored file; check disk capacity.'); }
             $offset += $n;
         }
@@ -271,10 +271,10 @@ final class ParcelRestore
 
     private function writeFile(string $path, string $data): void
     {
-        $h = fopen($path, 'xb');
+        $h = fopen($path, 'xb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
         if (!$h) { throw new RuntimeException('Cannot create verification marker.'); }
-        try { $this->writeAll($h, $data); fflush($h); } finally { fclose($h); }
-        chmod($path, 0600);
+        try { $this->writeAll($h, $data); fflush($h); } finally { fclose($h); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
+        chmod($path, 0600); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
     }
 }
 
@@ -294,12 +294,12 @@ function parcel_restore_password(bool $stdin): string
     if (PHP_OS_FAMILY === 'Windows' || !function_exists('shell_exec')) {
         throw new RuntimeException('Hidden password prompt is unavailable. Use --password-stdin or TELEGRAM_BACKUP_PASSWORD.');
     }
-    fwrite(STDERR, 'Archive password (hidden): ');
+    fwrite(STDERR, 'Archive password (hidden): '); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
     $mode = shell_exec('stty -g');
     if (!is_string($mode) || trim($mode) === '') { throw new RuntimeException('Cannot disable password echo; use --password-stdin.'); }
     shell_exec('stty -echo');
     try { $line = fgets(STDIN, 65537); }
-    finally { shell_exec('stty ' . escapeshellarg(trim($mode))); fwrite(STDERR, "\n"); }
+    finally { shell_exec('stty ' . escapeshellarg(trim($mode))); fwrite(STDERR, "\n"); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
     if ($line === false) { throw new RuntimeException('Password was not read.'); }
     return rtrim($line, "\r\n");
 }
@@ -307,21 +307,21 @@ function parcel_restore_password(bool $stdin): string
 // Library mode is for independent recovery tests; normal invocation always executes the CLI.
 if (!defined('PARCEL_RESTORE_LIBRARY')) {
     try {
-        $args = getopt('', ['input:', 'output:', 'password-stdin', 'help']);
-        if (isset($args['help'])) {
-            fwrite(STDOUT, "Telegram Backup recovery\nUsage: php restore.php --input=/path/to/parts --output=/new/empty/folder [--password-stdin]\nPassword: hidden terminal prompt, stdin flag, or TELEGRAM_BACKUP_PASSWORD environment variable.\nA nonzero exit leaves PARCEL-INCOMPLETE.txt. Never use an incomplete restore.\nNo existing website or database is modified.\n");
+        $parcel_restore_args = getopt('', ['input:', 'output:', 'password-stdin', 'help']);
+        if (isset($parcel_restore_args['help'])) {
+            fwrite(STDOUT, "TG Backup recovery\nUsage: php restore.php --input=/path/to/parts --output=/new/empty/folder [--password-stdin]\nPassword: hidden terminal prompt, stdin flag, or TELEGRAM_BACKUP_PASSWORD environment variable.\nA nonzero exit leaves PARCEL-INCOMPLETE.txt. Never use an incomplete restore.\nNo existing website or database is modified.\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
             exit(0);
         }
-        if (empty($args['input']) || empty($args['output'])) { throw new RuntimeException('Required: --input=/path/to/parts --output=/new/empty/folder. Use --help for instructions.'); }
-        $password = parcel_restore_password(isset($args['password-stdin']));
-        if ($password === '') { throw new RuntimeException('Password cannot be empty.'); }
-        $report = (new ParcelRestore())->run($args['input'], $args['output'], $password);
-        if (function_exists('sodium_memzero')) { sodium_memzero($password); }
-        fwrite(STDOUT, sprintf("VERIFIED: %d files, %d directories, %d bytes, %d parts.\nOutput: %s\nInspect PARCEL-VERIFIED.json. Database SQL was extracted, not imported.\n",
-            $report['files'], $report['directories'], $report['bytes'], $report['parts'], realpath($args['output'])));
+        if (empty($parcel_restore_args['input']) || empty($parcel_restore_args['output'])) { throw new RuntimeException('Required: --input=/path/to/parts --output=/new/empty/folder. Use --help for instructions.'); }
+        $parcel_restore_password = parcel_restore_password(isset($parcel_restore_args['password-stdin']));
+        if ($parcel_restore_password === '') { throw new RuntimeException('Password cannot be empty.'); }
+        $parcel_restore_report = (new ParcelRestore())->run($parcel_restore_args['input'], $parcel_restore_args['output'], $parcel_restore_password);
+        if (function_exists('sodium_memzero')) { sodium_memzero($parcel_restore_password); }
+        fwrite(STDOUT, sprintf("VERIFIED: %d files, %d directories, %d bytes, %d parts.\nOutput: %s\nInspect PARCEL-VERIFIED.json. Database SQL was extracted, not imported.\n", // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
+            $parcel_restore_report['files'], $parcel_restore_report['directories'], $parcel_restore_report['bytes'], $parcel_restore_report['parts'], realpath($parcel_restore_args['output'])));
         exit(0);
-    } catch (Throwable $e) {
-        fwrite(STDERR, 'RESTORE FAILED: ' . $e->getMessage() . "\nNo completed restore should be deployed. Use a fresh empty output directory for the next attempt.\n");
+    } catch (Throwable $parcel_restore_e) {
+        fwrite(STDERR, 'RESTORE FAILED: ' . $parcel_restore_e->getMessage() . "\nNo completed restore should be deployed. Use a fresh empty output directory for the next attempt.\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Standalone CLI recovery has no WordPress filesystem API; streams and private permissions are required.
         exit(1);
     }
 }

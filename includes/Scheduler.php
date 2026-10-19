@@ -5,7 +5,7 @@ final class Scheduler {
     private static bool $initialized=false;
     public static function init(): void {
         if (self::$initialized) { return; } self::$initialized=true;
-        add_filter('cron_schedules',static function($s) { $s['parcel_minute']=['interval'=>60,'display'=>__('Every minute (TG Backup)','telegram-backup')]; return $s; });
+        add_filter('cron_schedules',static function($s) { $s['parcel_minute']=['interval'=>60,'display'=>__('Every minute (TG Backup)','tg-backup')]; return $s; });
         add_action('parcel_worker',static function() {
             try { Engine::tick('cron'); } catch (\Throwable $e) { Support::log('','error',$e->getMessage()); }
         });

@@ -1,4 +1,4 @@
-# Telegram Backup
+# TG Backup
 
 [![WordPress 6.5+](https://img.shields.io/badge/WordPress-6.5%2B-2271b1)](https://wordpress.org/)
 [![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777bb4)](https://www.php.net/)
@@ -7,9 +7,9 @@
 
 **Back up WordPress to your own Telegram bot. Restore from downloaded archives, even if the original site is gone.**
 
-Telegram Backup compresses and encrypts data on your server, uploads the archive in parts, and shows the state of the queue, cron, and local storage. Free and open source, with no developer account, subscription, or telemetry.
+TG Backup compresses and encrypts data on your server, uploads the archive in parts, and shows the state of the queue, cron, and local storage. Free and open source, with no account with the plugin authors, paid plugin subscription, or telemetry. You need your own Telegram account and bot.
 
-[**Download ZIP v1.0.0**](https://github.com/realnoedelo/WP-Telegram-backup/releases/download/v1.0.0/telegram-backup-1.0.0.zip) · [Latest release](https://github.com/realnoedelo/WP-Telegram-backup/releases/latest) · [Recovery guide](docs/RESTORE.md) · [Report an issue](https://github.com/realnoedelo/WP-Telegram-backup/issues)
+[**Download ZIP v1.0.1**](https://github.com/realnoedelo/WP-Telegram-backup/releases/download/v1.0.1/tg-backup-1.0.1.zip) · [Latest release](https://github.com/realnoedelo/WP-Telegram-backup/releases/latest) · [Recovery guide](docs/RESTORE.md) · [Report an issue](https://github.com/realnoedelo/WP-Telegram-backup/issues)
 
 ## Two workflows
 
@@ -31,12 +31,23 @@ Once you have downloaded the complete archive, recovery needs neither a running 
 
 [Detailed bot setup guide →](docs/TELEGRAM.md)
 
+## Updating from 1.0.0
+
+Version 1.0.1 uses the **TG Backup** name and the `tg-backup` plugin folder. The repository URL stays the same.
+
+1. Let active jobs finish. Keep the archive password and a copy of the private storage outside the site. Leave `TELEGRAM_BACKUP_STORAGE_DIR` and its path unchanged.
+2. Deactivate the old plugin in the `telegram-backup` folder. **Do not use WordPress Delete**: its uninstall handler can remove settings shared with the new version. Do not activate both versions together.
+3. Install `tg-backup-1.0.1.zip` and activate **TG Backup**. Existing saved settings and local backup history are reused; the archive format remains version 1.
+4. Check the connection, storage, next scheduled run, and cron heartbeat. If a system cron entry still points at the old plugin folder, update it from **Overview → Cron setup**.
+5. After verifying the new version, remove only the inactive old `wp-content/plugins/telegram-backup` source directory through your file manager or deployment tool. Keep the private backup directory.
+
 ## Features
 
 | Feature | Included |
 | --- | --- |
 | Backup scope | Full site, database only, or files only; exclusions by relative path |
 | Queue | Saved progress, one worker at a time, delayed retries for temporary errors, cancellation, and logs |
+| Telegram status | One progress message per job, updated in place; archive parts, manifest and recovery tool are sent as separate silent documents |
 | Scheduling | Manual, hourly, daily, or weekly; separate cron and manual-run status |
 | Storage controls | Total local quota, maximum backup size, free-space reserve, and retention by count and age |
 | Network | HTTP/HTTPS/SOCKS5/SOCKS5H proxies, custom DNS or DoH; shared settings for checks and uploads |
@@ -71,6 +82,12 @@ define('TELEGRAM_BACKUP_STORAGE_DIR', '/path/outside/webroot/backups');
 
 Replace the example with your own path. The directory must belong to the PHP user; directory permissions are `0700`, and file permissions are `0600`. Do not share the directory between sites. Without this setting, the plugin uses a system temporary directory that the host may clean. Persistent storage is required for automatic system cron setup.
 
+## Telegram progress
+
+Each job attempts to create one status message, then edits it as work progresses and finishes. Progress is an overall estimate. Archive parts, the manifest and the recovery tool remain separate document messages, sent silently. “Silent” means without sound: Telegram clients may still show notifications. Mute the destination chat in Telegram if you want no per-file notifications.
+
+In channels and supergroups, the status can link to up to 10 parts plus the manifest and recovery tool. **Private bot chats have no native public message links**: find the documents by their job ID instead. Status updates are best effort; a failed edit does not stop backup delivery or create a replacement announcement. Check the job state in WordPress and test recovery.
+
 ## Encryption and security
 
 | Mechanism | What it provides |
@@ -83,7 +100,7 @@ Replace the example with your own path. The directory must belong to the PHP use
 | Private storage | Working files stay outside the public web root; source symlinks are not archived |
 | No telemetry | No usage statistics are sent to the developer; Telegram and your chosen network services handle the transfers you configure |
 
-Content protection comes from **the plugin's encryption before upload**, not Telegram end-to-end encryption. The password is not sent to the bot or included in the recovery package. Telegram and your chosen infrastructure can see transfer metadata and the encrypted files.
+Content protection comes from **the plugin's encryption before upload**, not Telegram end-to-end encryption. The password is not sent to the bot or included in the recovery package. **Job captions and status messages, `manifest.json`, and the recovery script are sent unencrypted.** They expose job IDs, dates, backup type, counts, part names, sizes, hashes, and error summaries, but not the archive password or backed-up file contents. Telegram and your selected infrastructure also see transfer metadata.
 
 The WordPress process can access stored credentials: encrypting settings does not protect against a fully compromised site or server. Changing WordPress salts requires you to enter saved credentials again. The archive format is open, but it has not undergone an independent cryptographic audit. [Read the security model →](SECURITY.md)
 
@@ -95,7 +112,7 @@ Download **every** `part-*.pvlt` file from one backup, plus `manifest.json` and 
 php restore.php --input=/path/to/backup --output=/path/to/new-empty-directory
 ```
 
-On Linux/macOS, the tool prompts for the password without displaying it. Automation can use `--password-stdin` or the `TELEGRAM_BACKUP_PASSWORD` environment variable; do not pass a password as a command-line argument. The admin download is named `telegram-backup-restore.php`; substitute that name for `restore.php` if you use it.
+On Linux/macOS, the tool prompts for the password without displaying it. Automation can use `--password-stdin` or the `TELEGRAM_BACKUP_PASSWORD` environment variable; do not pass a password as a command-line argument. The admin download is named `tg-backup-restore.php`; substitute that name for `restore.php` if you use it.
 
 A verified recovery produces `files/` and/or `database.sql`, depending on the backup scope, plus `PARCEL-VERIFIED.json`. A `PARCEL-INCOMPLETE.txt` marker means recovery did not finish: do not deploy that output.
 
@@ -110,19 +127,19 @@ Automatic setup requires a Unix host, persistent storage, a suitable PHP CLI, an
 **Installed does not mean running.** The last background-run timestamp confirms execution; merely creating an entry or clicking a manual-run button does not. The plugin manages only its own marked crontab block, attempts to remove it on deactivation, and does not call hosting control-panel APIs.
 
 ```sh
-wp telegram-backup cron status
-wp telegram-backup cron install
-wp telegram-backup cron remove
+wp tg-backup cron status
+wp tg-backup cron install
+wp tg-backup cron remove
 ```
 
 Other WP-CLI commands:
 
 ```sh
-wp telegram-backup status
-wp telegram-backup check --type=full
-wp telegram-backup backup --type=full
-wp telegram-backup run
-wp telegram-backup cleanup
+wp tg-backup status
+wp tg-backup check --type=full
+wp tg-backup backup --type=full
+wp tg-backup run
+wp tg-backup cleanup
 ```
 
 `run` executes one queue step. A manual CLI run is not reported as a cron heartbeat. Run commands as the site's operating-system user.
@@ -135,6 +152,15 @@ wp telegram-backup cleanup
 - Backing up a running site does not produce a consistent transactional snapshot. For critical orders or accounting data, use a maintenance window or an additional database-native snapshot.
 - If Telegram accepts a file but its response is lost, a retry may create a duplicate. Job IDs, part names, and hashes help identify it.
 - Keep the password and another independent backup outside both this site and Telegram. Test recovery regularly.
+
+## 1.0.1 changes
+
+- Renamed the plugin and installable folder to **TG Backup** / `tg-backup`, preserving existing settings, storage, and version 1 archives.
+- Routed Bot API requests through the WordPress HTTP API while retaining streamed uploads and proxy/DNS controls.
+- Added one editable Telegram status message per job and silent document uploads. Status messages link to uploaded files in supported channels and supergroups.
+- Clarified data-transfer disclosures and upgrade instructions.
+
+See [Testing](docs/TESTING.md) for test procedures and recorded limits. GitHub distribution does not imply WordPress.org approval.
 
 ## Documentation and contributions
 

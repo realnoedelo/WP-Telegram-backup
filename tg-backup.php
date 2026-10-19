@@ -1,21 +1,19 @@
 <?php
 /**
- * Plugin Name: Telegram Backup
+ * Plugin Name: TG Backup
  * Plugin URI: https://github.com/realnoedelo/WP-Telegram-backup
  * Description: Encrypted, resumable WordPress backups to your own Telegram bot. Schedules, storage quotas, proxy and DNS diagnostics included.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Requires at least: 6.5
  * Requires PHP: 8.1
  * Author: realnoedelo and contributors
  * Author URI: https://github.com/realnoedelo
- * Update URI: https://github.com/realnoedelo/WP-Telegram-backup
  * License: GPL-3.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-3.0.html
- * Text Domain: telegram-backup
- * Domain Path: /languages
+ * Text Domain: tg-backup
  */
 if (!defined('ABSPATH')) { exit; }
-define('PARCEL_VERSION', '1.0.0');
+define('PARCEL_VERSION', '1.0.1');
 define('PARCEL_FILE', __FILE__);
 define('PARCEL_DIR', plugin_dir_path(__FILE__));
 define('PARCEL_URL', plugin_dir_url(__FILE__));
@@ -28,7 +26,7 @@ spl_autoload_register(static function ($class) {
     }
 });
 register_activation_hook(__FILE__, static function ($network_wide) {
-    if (is_multisite() || $network_wide) { wp_die(esc_html__('Telegram Backup 1.0 supports single-site WordPress only.', 'telegram-backup')); }
+    if (is_multisite() || $network_wide) { wp_die(esc_html__('TG Backup 1.0 supports single-site WordPress only.', 'tg-backup')); }
     \ParcelBackups\Settings::install();
     \ParcelBackups\Scheduler::init();
     \ParcelBackups\Scheduler::reschedule();
@@ -45,13 +43,12 @@ register_deactivation_hook(__FILE__, static function () {
     catch (\Throwable $e) { \ParcelBackups\Support::log('', 'warning', 'System cron was not removed: ' . $e->getMessage()); }
 });
 add_action('plugins_loaded', static function () {
-    load_plugin_textdomain('telegram-backup', false, dirname(plugin_basename(PARCEL_FILE)) . '/languages');
     \ParcelBackups\Scheduler::init();
     \ParcelBackups\Api::init();
     if (is_admin()) { \ParcelBackups\Admin::init(); }
     if (defined('WP_CLI') && WP_CLI) { \ParcelBackups\Cli::init(); }
 });
 add_filter('plugin_action_links_' . plugin_basename(__FILE__), static function ($links) {
-    array_unshift($links, '<a href="' . esc_url(admin_url('options-general.php?page=parcel-backups')) . '">' . esc_html__('Settings', 'telegram-backup') . '</a>');
+    array_unshift($links, '<a href="' . esc_url(admin_url('options-general.php?page=parcel-backups')) . '">' . esc_html__('Settings', 'tg-backup') . '</a>');
     return $links;
 });
