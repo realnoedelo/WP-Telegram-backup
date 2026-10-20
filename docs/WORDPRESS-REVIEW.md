@@ -1,6 +1,6 @@
 # WordPress directory review notes
 
-These notes explain operations retained deliberately in TG Backup 1.0.1. Narrow source-line PHPCS annotations are engineering explanations, not exemptions granted by WordPress.org. An automated pass does not establish directory approval; the Plugin Review Team may request changes.
+These notes explain operations retained deliberately in TG Backup 1.0.3. Narrow source-line PHPCS annotations are engineering explanations, not exemptions granted by WordPress.org. An automated pass does not establish directory approval; the Plugin Review Team may request changes.
 
 ## Backup engine, private storage and system cron
 
@@ -28,7 +28,9 @@ The administration installation/removal endpoints require administrator capabili
 
 ### Standalone cron access guard
 
-`tools/cron.php` rejects every non-CLI SAPI before bootstrap or filesystem work. It then validates its explicit local WordPress root, site identity and active plugin. An `ABSPATH` prerequisite at entry would prevent legitimate standalone execution because this script loads WordPress itself. Plugin Check 2.1.0's direct-file-access check recognizes `ABSPATH`/`WPINC` guards but does not recognize this CLI-only guard, so `missing_direct_file_access_protection` remains a documented scanner limitation for this entry point. The process exit is explicitly an integer status, not HTML output.
+`tools/cron.php` rejects every non-CLI SAPI before bootstrap or filesystem work. Its web branch contains an explicit `ABSPATH` guard, followed by an unconditional exit so that web execution is also refused after WordPress has loaded. The CLI branch does not require `ABSPATH` at entry: the worker loads WordPress itself, then validates the local root, site identity and active plugin. `tools/restore.php` uses the same web-only guard structure and remains usable without WordPress. No WordPress constants are fabricated and no direct-file-access checks are suppressed.
+
+The non-CLI guard was already present in version 1.0.2. Version 1.0.3 makes it recognizable by Plugin Check 2.1.0, whose detector does not recognize `PHP_SAPI` checks alone. It also removes the leading shell interpreter line from both PHP files: under a web SAPI that line was treated as output before `declare(strict_types=1)`, causing a compile error before the guard could run. Both tools are invoked through the PHP executable; that command-line interface is unchanged. Real HTTP tests now verify status 403 with and without a preloaded WordPress context.
 
 ### Status-message durability
 
@@ -42,6 +44,7 @@ Run the isolated checks from the plugin directory:
 
 ```sh
 php tests/archive.php
+php tests/cli-entry-points.php
 php tests/system-cron.php
 php tests/engine-status.php
 ```
@@ -66,4 +69,6 @@ Authorized admin downloads stream a binary attachment from a checked local path 
 
 ## Automated scan result
 
-Plugin Check 2.1.0 was run with runtime checks against the active, installable 1.0.1 package on WordPress 7.1.3. The final scan reports **two errors and zero warnings**, both `missing_direct_file_access_protection` for `tools/cron.php` and `tools/restore.php`. Both entry points have the explicit CLI-only guard described above. The scanner recognizes WordPress bootstrap guards but not these standalone guards. This result is **not an unqualified clean pass** or directory approval; the remaining findings and deliberate system-command/streaming operations require review.
+Plugin Check 2.1.0 was run with runtime checks against the active, installable 1.0.3 package on WordPress 7.1.3 on October 20, 2026. The scan reports **zero errors and zero warnings**. No checks were excluded. The two direct-file-access findings reported for versions 1.0.1 and 1.0.2 are resolved by the explicit web guards described above.
+
+This automated result is not WordPress.org approval or an independent security audit. The deliberate system-command and streaming operations described above remain available for manual review.

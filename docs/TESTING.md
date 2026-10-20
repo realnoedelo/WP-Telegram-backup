@@ -1,4 +1,15 @@
-# Version 1.0.1 verification
+# Version 1.0.3 verification
+
+Rechecked on October 20, 2026, with PHP 8.5.11 and a disposable WordPress 7.1.3 installation.
+
+- **Plugin Check 2.1.0:** all 34 standard checks, including runtime checks, report zero errors and zero warnings against the installable ZIP; no checks excluded.
+- **CLI entry points:** 8 checks cover real loopback HTTP requests to both tools, with and without `ABSPATH`, HTTP 403 before runtime work, recovery help without WordPress, and explicit cron argument failures before bootstrap.
+- **Archive/recovery:** 15 cases passed, including a fresh standalone PHP process restoring the encrypted multipart fixture without WordPress or `ABSPATH`. Binary, Unicode, SQL, empty files and completion markers were verified.
+- **System cron:** 39 isolated checks passed without touching a host crontab.
+
+Run `php tests/cli-entry-points.php`, `php tests/archive.php` and `php tests/system-cron.php`. The entry-point suite stops its temporary HTTP server and removes its fixtures on success or failure. These checks do not constitute WordPress.org approval or a full security audit.
+
+## Version 1.0.1 verification
 
 Rechecked on October 19, 2026, using WordPress 7.1.3, PHP 8.5.11, MariaDB 13.0.2 and Chromium in a disposable local installation. No live Telegram token or recipient was supplied.
 

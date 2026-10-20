@@ -1,4 +1,3 @@
-#!/usr/bin/env php
 <?php
 /**
  * TG Backup standalone recovery tool. GPL-3.0-or-later.
@@ -6,7 +5,15 @@
  */
 declare(strict_types=1);
 
-if (PHP_SAPI !== 'cli') { http_response_code(403); exit('Run this recovery tool from the command line.'); }
+// Recovery works without WordPress; only web requests need the WordPress guard.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    if (!defined('ABSPATH')) {
+        exit('Run this recovery tool from the command line.');
+    }
+    // Refuse web execution even when WordPress has already loaded.
+    exit('Run this recovery tool from the command line.');
+}
 
 final class ParcelRestore
 {

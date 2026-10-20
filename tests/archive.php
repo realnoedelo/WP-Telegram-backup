@@ -35,6 +35,25 @@ namespace {
     check($report['verified']&&$report['files']===3,'report'); check(file_get_contents($base.'/restored/files/папка/binary.bin')===$binary,'binary fidelity');
     check(file_get_contents($base.'/restored/database.sql')===$sql,'SQL fidelity'); check(filesize($base.'/restored/files/empty.txt')===0,'zero file');
     check(!file_exists($base.'/restored/PARCEL-INCOMPLETE.txt'),'completion marker'); $passed++; echo "PASS multipart binary Unicode and empty-file roundtrip\n";
+    // A fresh process has no ABSPATH, WordPress bootstrap, or library-mode constant.
+    $cliEnvironment = getenv(); unset($cliEnvironment['TELEGRAM_BACKUP_PASSWORD'], $cliEnvironment['PARCEL_BACKUP_PASSWORD']);
+    $cli = proc_open([PHP_BINARY, '-d', 'auto_prepend_file=', '-d', 'auto_append_file=', dirname(__DIR__).'/tools/restore.php',
+        '--input='.$input, '--output='.$base.'/standalone', '--password-stdin'],
+        [0=>['pipe','r'],1=>['file',$base.'/restore.stdout','w'],2=>['file',$base.'/restore.stderr','w']], $cliPipes, $base, $cliEnvironment);
+    check(is_resource($cli),'standalone recovery process started');
+    fwrite($cliPipes[0],$password."\n");fclose($cliPipes[0]);$cliDeadline=microtime(true)+30;
+    try {
+        do {
+            $cliStatus=proc_get_status($cli);
+            if(!$cliStatus['running']){break;}
+            check(microtime(true)<$cliDeadline,'standalone recovery deadline');usleep(10000);
+        } while(true);
+        check($cliStatus['exitcode']===0,'standalone recovery exit status: '.file_get_contents($base.'/restore.stderr'));
+    } finally { if(proc_get_status($cli)['running']){proc_terminate($cli);}proc_close($cli); }
+    check(str_contains(file_get_contents($base.'/restore.stdout'),'VERIFIED: 3 files'),'standalone recovery verification output');
+    check(file_get_contents($base.'/standalone/files/папка/binary.bin')===$binary&&file_get_contents($base.'/standalone/database.sql')===$sql,'standalone binary and SQL fidelity');
+    check(filesize($base.'/standalone/files/empty.txt')===0&&is_file($base.'/standalone/PARCEL-VERIFIED.json')&&!file_exists($base.'/standalone/PARCEL-INCOMPLETE.txt'),'standalone completion markers and empty file');
+    $passed++;echo "PASS standalone CLI recovery without WordPress or ABSPATH\n";
     rejected(fn()=>(new ParcelRestore())->run($input,$base.'/wrong','wrong password'),'wrong password');
     check(file_exists($base.'/wrong/PARCEL-INCOMPLETE.txt'),'failure marker preserved');
     rejected(fn()=>(new ParcelRestore())->run($input,$base.'/restored',$password),'existing nonempty destination');

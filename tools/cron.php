@@ -1,8 +1,15 @@
-#!/usr/bin/env php
 <?php
 /** Standalone cron entry point. Executes only TG Backup's due WordPress hooks. */
 declare(strict_types=1);
-if (PHP_SAPI !== 'cli') { http_response_code(403); exit; }
+// CLI starts before WordPress; web requests must never run this worker.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    if (!defined('ABSPATH')) {
+        exit;
+    }
+    // Refuse web execution even when WordPress has already loaded.
+    exit;
+}
 
 $parcel_cron_lock = null;
 $parcel_cron_token = null;

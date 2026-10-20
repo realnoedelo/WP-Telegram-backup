@@ -9,7 +9,7 @@
 
 TG Backup compresses and encrypts data on your server, uploads the archive in parts, and shows the state of the queue, cron, and local storage. Free and open source, with no account with the plugin authors, paid plugin subscription, or telemetry. You need your own Telegram account and bot.
 
-[**Download ZIP v1.0.2**](https://github.com/realnoedelo/WP-Telegram-backup/releases/download/v1.0.2/tg-backup-1.0.2.zip) · [Latest release](https://github.com/realnoedelo/WP-Telegram-backup/releases/latest) · [Recovery guide](docs/RESTORE.md) · [Report an issue](https://github.com/realnoedelo/WP-Telegram-backup/issues)
+[**Download ZIP v1.0.3**](https://github.com/realnoedelo/WP-Telegram-backup/releases/download/v1.0.3/tg-backup-1.0.3.zip) · [Latest release](https://github.com/realnoedelo/WP-Telegram-backup/releases/latest) · [Recovery guide](docs/RESTORE.md) · [Report an issue](https://github.com/realnoedelo/WP-Telegram-backup/issues)
 
 ## Two workflows
 
@@ -37,7 +37,7 @@ Version 1.0.1 uses the **TG Backup** name and the `tg-backup` plugin folder. The
 
 1. Let active jobs finish. Keep the archive password and a copy of the private storage outside the site. Leave `TELEGRAM_BACKUP_STORAGE_DIR` and its path unchanged.
 2. Deactivate the old plugin in the `telegram-backup` folder. **Do not use WordPress Delete**: its uninstall handler can remove settings shared with the new version. Do not activate both versions together.
-3. Install `tg-backup-1.0.2.zip` and activate **TG Backup**. Existing saved settings and local backup history are reused; the archive format remains version 1.
+3. Install `tg-backup-1.0.3.zip` and activate **TG Backup**. Existing saved settings and local backup history are reused; the archive format remains version 1.
 4. Check the connection, storage, next scheduled run, and cron heartbeat. If a system cron entry still points at the old plugin folder, update it from **Overview → Cron setup**.
 5. After verifying the new version, remove only the inactive old `wp-content/plugins/telegram-backup` source directory through your file manager or deployment tool. Keep the private backup directory.
 
@@ -152,6 +152,11 @@ wp tg-backup cleanup
 - Backing up a running site does not produce a consistent transactional snapshot. For critical orders or accounting data, use a maintenance window or an additional database-native snapshot.
 - If Telegram accepts a file but its response is lost, a retry may create a duplicate. Job IDs, part names, and hashes help identify it.
 - Keep the password and another independent backup outside both this site and Telegram. Test recovery regularly.
+
+## 1.0.3 changes
+
+- Removed leading shell interpreter lines so web requests reach the intended HTTP 403 guard instead of a PHP compile error.
+- Made the standalone cron and recovery web-access guards recognizable by Plugin Check while preserving the standalone cron worker and WordPress-independent recovery.
 
 ## 1.0.2 changes
 
